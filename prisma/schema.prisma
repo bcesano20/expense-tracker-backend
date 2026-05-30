@@ -1,0 +1,92 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  name      String
+  lastName  String
+  email     String    @unique
+  password  String
+  status    String    @default("active")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  accounts  Account[]
+}
+
+model Account {
+  id        Int       @id @default(autoincrement())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  name      String
+  currency  String    @default("USD")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  cards     Card[]
+  expenses  Expense[]
+}
+
+model Card {
+  id            Int       @id @default(autoincrement())
+  account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId     Int
+  name          String
+  bank          String
+  type          String    // "credit" or "debit"
+  network       String    // "visa", "mastercard", "amex", "discover"
+  closeDay      Int?      // day of the month (e.g. 25) — credit cards only
+  balance       Float?    // available funds — debit cards only
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  expenses      ExpenseCard[]
+  installments  Installment[]
+}
+
+model Expense {
+  id              Int       @id @default(autoincrement())
+  account         Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId       Int
+  description     String
+  amount          Float
+  date            DateTime
+  category        String
+  paymentMethod   String    // "cash", "transfer", "other", or card id
+  billingMonth    Int       // month when it is billed (1-12)
+  billingYear     Int       // year when it is billed
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  card            ExpenseCard?
+  installments    Installment[]
+}
+
+model ExpenseCard {
+  id        Int     @id @default(autoincrement())
+  expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  expenseId Int     @unique
+  card      Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId    Int
+}
+
+model Installment {
+  id                  Int       @id @default(autoincrement())
+  expense             Expense   @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  expenseId           Int
+  card                Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId              Int
+  installmentNumber   Int       // installment number (1, 2, 3...)
+  totalInstallments   Int       // total number of installments
+  installmentAmount   Float
+  paymentMonth        Int       // month when this installment is due
+  paymentYear         Int       // year when this installment is due
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}
