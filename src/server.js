@@ -10,6 +10,7 @@ const authRoutes = require('./routes/auth');
 const usersRoutes = require('./routes/user');
 const accountsRoutes = require('./routes/account');
 const cardsRoutes = require('./routes/card');
+const expensesRoutes = require('./routes/expenses');
 
 // Middlewares
 app.use(cors());
@@ -20,6 +21,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/accounts', accountsRoutes);
 app.use('/api/cards', cardsRoutes);
+app.use('/api/expenses', expensesRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
