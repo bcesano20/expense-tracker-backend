@@ -2,6 +2,8 @@ const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+const { ERROR_MESSAGES } = require('../helpers/constants');
+
 const prisma = new PrismaClient();
 
 // REGISTER
@@ -14,7 +16,7 @@ exports.register = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'Nombre, apellido, email y contraseña son requeridos',
+        message: ERROR_MESSAGES.REGISTER_REQUIRED_FIELDS,
       });
     }
 
@@ -22,7 +24,7 @@ exports.register = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'WEAK_PASSWORD',
-        message: 'La contraseña debe tener al menos 6 caracteres',
+        message: ERROR_MESSAGES.WEAK_PASSWORD,
       });
     }
 
@@ -35,7 +37,7 @@ exports.register = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'EMAIL_EXISTS',
-        message: 'El email ya está registrado',
+        message: ERROR_MESSAGES.EMAIL_EXISTS,
       });
     }
 
@@ -85,7 +87,7 @@ exports.login = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'Email y contraseña requeridos',
+        message: ERROR_MESSAGES.LOGIN_REQUIRED_FIELDS,
       });
     }
 
@@ -98,7 +100,7 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         error: 'INVALID_CREDENTIALS',
-        message: 'Email o contraseña incorrectos',
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
       });
     }
 
@@ -109,7 +111,7 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         error: 'INVALID_CREDENTIALS',
-        message: 'Email o contraseña incorrectos',
+        message: ERROR_MESSAGES.INVALID_PASSWORD,
       });
     }
 
@@ -149,7 +151,7 @@ exports.getProfile = async (req, res, next) => {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Usuario no encontrado',
+        message: ERROR_MESSAGES.USER_NOT_FOUND,
       });
     }
 
