@@ -8,16 +8,17 @@ datasource db {
 }
 
 model User {
-  id        Int       @id @default(autoincrement())
+  id        Int        @id @default(autoincrement())
   name      String
   lastName  String
-  email     String    @unique
+  email     String     @unique
   password  String
-  status    String    @default("active")
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  status    String     @default("active")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
-  accounts  Account[]
+  accounts   Account[]
+  categories Category[]
 }
 
 model Account {
@@ -57,7 +58,8 @@ model Expense {
   description     String
   amount          Float
   date            DateTime
-  category        String
+  category        Category  @relation(fields: [categoryId], references: [id])
+  categoryId      Int
   paymentMethod   String    // "cash", "transfer", "other", or card id
   billingMonth    Int       // month when it is billed (1-12)
   billingYear     Int       // year when it is billed
@@ -74,6 +76,18 @@ model ExpenseCard {
   expenseId Int     @unique
   card      Card    @relation(fields: [cardId], references: [id], onDelete: Cascade)
   cardId    Int
+}
+
+model Category {
+  id        Int       @id @default(autoincrement())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  name      String
+  color     String    // hex color, e.g. "#FF5733"
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  expenses  Expense[]
 }
 
 model Installment {
