@@ -1,4 +1,3 @@
-// src/server.js
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
@@ -12,6 +11,7 @@ const accountsRoutes = require('./routes/account');
 const cardsRoutes = require('./routes/card');
 const expensesRoutes = require('./routes/expense');
 const reportsRoutes = require('./routes/report');
+const categoryRoutes = require('./routes/category');
 
 // Middlewares
 app.use(cors());
@@ -24,6 +24,7 @@ app.use('/api/accounts', accountsRoutes);
 app.use('/api/cards', cardsRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/categories', categoryRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
