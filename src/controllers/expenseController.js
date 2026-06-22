@@ -13,7 +13,7 @@ exports.createExpense = async (req, res, next) => {
       description,
       amount,
       date,
-      category,
+      categoryId,
       paymentMethod,
       cardId,
       installments
@@ -21,7 +21,7 @@ exports.createExpense = async (req, res, next) => {
     const userId = req.user.id;
 
     // 1. VALIDATIONS
-    if (!accountId || !description || !amount || !date || !category || !paymentMethod) {
+    if (!accountId || !description || !amount || !date || !categoryId || !paymentMethod) {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
@@ -56,7 +56,7 @@ exports.createExpense = async (req, res, next) => {
       description: description.trim(),
       amount: parseFloat(amount),
       date: new Date(date),
-      category: category.trim(),
+      categoryId: parseInt(categoryId),
       paymentMethod
     };
 
@@ -117,7 +117,7 @@ exports.createExpense = async (req, res, next) => {
             installmentsToCreate.push({
               installmentNumber: i,
               totalInstallments: installments,
-              installmentAmount: montoCuota,
+              installmentAmount,
               paymentMonth,
               paymentYear,
               cardId: parseInt(cardId)
@@ -136,9 +136,9 @@ exports.createExpense = async (req, res, next) => {
         }
       } else if (card.type === 'debit') {
         // Debit card: Billing at the current month and reduce from the salary
-        const { billingMonth, billingYear } = calcularMesFacturacion(
+        const { billingMonth, billingYear } = calculateBillingMonth(
           new Date(date),
-          25 // default day for debit 
+          25 // default day for debit
         );
 
         expenseData.billingMonth = billingMonth;
@@ -209,6 +209,7 @@ exports.createExpense = async (req, res, next) => {
     const detailedExpense = await prisma.expense.findUnique({
       where: { id: expense.id },
       include: {
+        category: true,
         card: {
           include: { card: true }
         },
@@ -260,7 +261,7 @@ exports.getExpense = async (req, res, next) => {
 
     // Filter by category
     if (category) {
-      where.category = category;
+      where.categoryId = parseInt(category);
     }
 
     // Order
@@ -277,6 +278,7 @@ exports.getExpense = async (req, res, next) => {
     const expenses = await prisma.expense.findMany({
       where,
       include: {
+        category: true,
         card: {
           include: { card: true }
         },
@@ -309,6 +311,7 @@ exports.getExpenseById = async (req, res, next) => {
       where: { id: parseInt(id) },
       include: {
         account: true,
+        category: true,
         card: {
           include: { card: true }
         },
@@ -350,7 +353,7 @@ exports.updateExpense = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { description, amount, category } = req.body;
+    const { description, amount, categoryId } = req.body;
 
     // Get current expense
     const expense = await prisma.expense.findUnique({
@@ -386,12 +389,13 @@ exports.updateExpense = async (req, res, next) => {
       }
       updateData.amount = parseFloat(amount);
     }
-    if (category) updateData.category = category.trim();
+    if (categoryId) updateData.categoryId = parseInt(categoryId);
 
     const updatedExpense = await prisma.expense.update({
       where: { id: parseInt(id) },
       data: updateData,
       include: {
+        category: true,
         card: {
           include: { card: true }
         },
