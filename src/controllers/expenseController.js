@@ -16,7 +16,7 @@ exports.createExpense = async (req, res, next) => {
       categoryId,
       paymentMethod,
       cardId,
-      installments
+      totalInstallments
     } = req.body;
     const userId = req.user.id;
 
@@ -61,7 +61,7 @@ exports.createExpense = async (req, res, next) => {
     };
 
     let cardData = null;
-    let installmentsToCreate = [];
+    let totalInstallmentsToCreate = [];
 
     // If the expense is with card
     if (paymentMethod === 'card' && cardId) {
@@ -78,7 +78,7 @@ exports.createExpense = async (req, res, next) => {
         });
       }
 
-      // Just the credit cards can have installments
+      // Just the credit cards can have totalInstallments
       if (card.type === 'credit') {
         // Calculate the billing Month
         const { billingMonth, billingYear } = calculateBillingMonth(
@@ -89,9 +89,9 @@ exports.createExpense = async (req, res, next) => {
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
 
-        // If there are installments set the number
-        if (installments && installments > 1) {
-          expenseData.paymentMethod = `card-installments-${installments}`;
+        // If there are totalInstallments set the number
+        if (totalInstallments && totalInstallments > 1) {
+          expenseData.paymentMethod = `card-totalInstallments-${totalInstallments}`;
         } else {
           expenseData.paymentMethod = 'card';
         }
@@ -100,11 +100,11 @@ exports.createExpense = async (req, res, next) => {
           cardId: parseInt(cardId)
         };
 
-        // Create installments if is in more than one installment
-        if (installments && installments > 1) {
-          const installmentAmount = parseFloat(amount) / installments;
+        // Create totalInstallments if is in more than one installment
+        if (totalInstallments && totalInstallments > 1) {
+          const installmentAmount = parseFloat(amount) / totalInstallments;
 
-          for (let i = 1; i <= installments; i++) {
+          for (let i = 1; i <= totalInstallments; i++) {
             let paymentMonth = billingMonth + (i - 1);
             let paymentYear = billingYear;
 
@@ -114,9 +114,9 @@ exports.createExpense = async (req, res, next) => {
               paymentYear += Math.floor((billingMonth + i - 1) / 12);
             }
 
-            installmentsToCreate.push({
+            totalInstallmentsToCreate.push({
               installmentNumber: i,
-              totalInstallments: installments,
+              totalInstallments: totalInstallments,
               installmentAmount,
               paymentMonth,
               paymentYear,
@@ -125,7 +125,7 @@ exports.createExpense = async (req, res, next) => {
           }
         } else {
           // Expense in just one installment
-          installmentsToCreate.push({
+          totalInstallmentsToCreate.push({
             installmentNumber: 1,
             totalInstallments: 1,
             installmentAmount: parseFloat(amount),
@@ -160,7 +160,7 @@ exports.createExpense = async (req, res, next) => {
         };
 
         // One installment for debit
-        installmentsToCreate.push({
+        totalInstallmentsToCreate.push({
           installmentNumber: 1,
           totalInstallments: 1,
           installmentAmount: parseFloat(amount),
@@ -196,9 +196,9 @@ exports.createExpense = async (req, res, next) => {
     }
 
     // 6. CREATE INSTALLMENT ( IF APPLY )
-    if (installmentsToCreate.length > 0) {
+    if (totalInstallmentsToCreate.length > 0) {
       await prisma.installment.createMany({
-        data: installmentsToCreate.map(inst => ({
+        data: totalInstallmentsToCreate.map(inst => ({
           ...inst,
           expenseId: expense.id
         }))
@@ -465,7 +465,7 @@ exports.deleteExpense = async (req, res, next) => {
       }
     }
 
-    // The installments are deleted on cascade
+    // The totalInstallments are deleted on cascade
     await prisma.expense.delete({
       where: { id: parseInt(id) }
     });
