@@ -16,7 +16,7 @@ exports.createExpense = async (req, res, next) => {
       categoryId,
       paymentMethod,
       cardId,
-      installments
+      totalInstallments,
     } = req.body;
     const userId = req.user.id;
 
@@ -25,7 +25,7 @@ exports.createExpense = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'La cuenta, descripcion, monto, fecha, categoria y medio de pago son requeridos'
+        message: 'La cuenta, descripcion, monto, fecha, categoria y medio de pago son requeridos',
       });
     }
 
@@ -33,20 +33,20 @@ exports.createExpense = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'INVALID_AMOUNT',
-        message: 'El monto debe ser mayor a 0'
+        message: 'El monto debe ser mayor a 0',
       });
     }
 
     // 2. Check that the account exists and has the user's ownership
     const account = await prisma.account.findUnique({
-      where: { id: parseInt(accountId) }
+      where: { id: parseInt(accountId) },
     });
 
     if (!account || account.userId !== userId) {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para agregar gastos a esta cuenta'
+        message: 'No tienes permiso para agregar gastos a esta cuenta',
       });
     }
 
@@ -57,54 +57,51 @@ exports.createExpense = async (req, res, next) => {
       amount: parseFloat(amount),
       date: new Date(date),
       categoryId: parseInt(categoryId),
-      paymentMethod
+      paymentMethod,
     };
 
     let cardData = null;
-    let installmentsToCreate = [];
+    let totalInstallmentsToCreate = [];
 
     // If the expense is with card
     if (paymentMethod === 'card' && cardId) {
       // Check card existance
       const card = await prisma.card.findUnique({
-        where: { id: parseInt(cardId) }
+        where: { id: parseInt(cardId) },
       });
 
       if (!card || card.accountId !== parseInt(accountId)) {
         return res.status(404).json({
           success: false,
           error: 'CARD_NOT_FOUND',
-          message: 'Tarjeta no encontrada o no pertenece a esta cuenta'
+          message: 'Tarjeta no encontrada o no pertenece a esta cuenta',
         });
       }
 
-      // Just the credit cards can have installments
+      // Just the credit cards can have totalInstallments
       if (card.type === 'credit') {
         // Calculate the billing Month
-        const { billingMonth, billingYear } = calculateBillingMonth(
-          new Date(date),
-          card.closeDay
-        );
+        const { billingMonth, billingYear } = calculateBillingMonth(new Date(date), card.closeDay);
 
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
 
-        // If there are installments set the number
-        if (installments && installments > 1) {
-          expenseData.paymentMethod = `card-installments-${installments}`;
+        // If there are totalInstallments set the number
+        if (totalInstallments && totalInstallments > 1) {
+          expenseData.paymentMethod = `card-totalInstallments-${totalInstallments}`;
         } else {
           expenseData.paymentMethod = 'card';
         }
 
         cardData = {
-          cardId: parseInt(cardId)
+          cardId: parseInt(cardId),
         };
 
-        // Create installments if is in more than one installment
-        if (installments && installments > 1) {
-          const installmentAmount = parseFloat(amount) / installments;
+        // Create totalInstallments if is in more than one installment
+        if (totalInstallments && totalInstallments > 1) {
+          const installmentAmount = parseFloat(amount) / totalInstallments;
 
-          for (let i = 1; i <= installments; i++) {
+          for (let i = 1; i <= totalInstallments; i++) {
             let paymentMonth = billingMonth + (i - 1);
             let paymentYear = billingYear;
 
@@ -114,24 +111,24 @@ exports.createExpense = async (req, res, next) => {
               paymentYear += Math.floor((billingMonth + i - 1) / 12);
             }
 
-            installmentsToCreate.push({
+            totalInstallmentsToCreate.push({
               installmentNumber: i,
-              totalInstallments: installments,
+              totalInstallments: totalInstallments,
               installmentAmount,
               paymentMonth,
               paymentYear,
-              cardId: parseInt(cardId)
+              cardId: parseInt(cardId),
             });
           }
         } else {
           // Expense in just one installment
-          installmentsToCreate.push({
+          totalInstallmentsToCreate.push({
             installmentNumber: 1,
             totalInstallments: 1,
             installmentAmount: parseFloat(amount),
             paymentMonth: billingMonth,
             paymentYear: billingYear,
-            cardId: parseInt(cardId)
+            cardId: parseInt(cardId),
           });
         }
       } else if (card.type === 'debit') {
@@ -150,30 +147,30 @@ exports.createExpense = async (req, res, next) => {
           where: { id: parseInt(cardId) },
           data: {
             balance: {
-              decrement: parseFloat(amount)
-            }
-          }
+              decrement: parseFloat(amount),
+            },
+          },
         });
 
         cardData = {
-          cardId: parseInt(cardId)
+          cardId: parseInt(cardId),
         };
 
         // One installment for debit
-        installmentsToCreate.push({
+        totalInstallmentsToCreate.push({
           installmentNumber: 1,
           totalInstallments: 1,
           installmentAmount: parseFloat(amount),
           paymentMonth: billingMonth,
           paymentYear: billingYear,
-          cardId: parseInt(cardId)
+          cardId: parseInt(cardId),
         });
       }
     } else {
       // Expense in cash or transfer
       const { billingMonth, billingYear } = {
         billingMonth: new Date(date).getMonth() + 1,
-        billingYear: new Date(date).getFullYear()
+        billingYear: new Date(date).getFullYear(),
       };
 
       expenseData.billingMonth = billingMonth;
@@ -182,7 +179,7 @@ exports.createExpense = async (req, res, next) => {
 
     // 4. CREATE EXPENSE
     const expense = await prisma.expense.create({
-      data: expenseData
+      data: expenseData,
     });
 
     // 5. CREATE RELATION WITH CARD ( IF APPLY )
@@ -190,18 +187,18 @@ exports.createExpense = async (req, res, next) => {
       await prisma.expenseCard.create({
         data: {
           expenseId: expense.id,
-          ...cardData
-        }
+          ...cardData,
+        },
       });
     }
 
     // 6. CREATE INSTALLMENT ( IF APPLY )
-    if (installmentsToCreate.length > 0) {
+    if (totalInstallmentsToCreate.length > 0) {
       await prisma.installment.createMany({
-        data: installmentsToCreate.map(inst => ({
+        data: totalInstallmentsToCreate.map((inst) => ({
           ...inst,
-          expenseId: expense.id
-        }))
+          expenseId: expense.id,
+        })),
       });
     }
 
@@ -211,18 +208,17 @@ exports.createExpense = async (req, res, next) => {
       include: {
         category: true,
         card: {
-          include: { card: true }
+          include: { card: true },
         },
-        installments: true
-      }
+        installments: true,
+      },
     });
 
     res.status(201).json({
       success: true,
       data: detailedExpense,
-      message: 'Gasto creado exitosamente'
+      message: 'Gasto creado exitosamente',
     });
-
   } catch (error) {
     next(error);
   }
@@ -237,20 +233,20 @@ exports.getExpense = async (req, res, next) => {
     const userId = req.user.id;
 
     const account = await prisma.account.findUnique({
-      where: { id: parseInt(accountId) }
+      where: { id: parseInt(accountId) },
     });
 
     if (!account || account.userId !== userId) {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para ver los gastos de esta cuenta'
+        message: 'No tienes permiso para ver los gastos de esta cuenta',
       });
     }
 
     // Build filters
     const where = {
-      accountId: parseInt(accountId)
+      accountId: parseInt(accountId),
     };
 
     // Filter by month and year (billing month)
@@ -280,20 +276,19 @@ exports.getExpense = async (req, res, next) => {
       include: {
         category: true,
         card: {
-          include: { card: true }
+          include: { card: true },
         },
-        installments: true
+        installments: true,
       },
-      orderBy: orderByClause
+      orderBy: orderByClause,
     });
 
     res.status(200).json({
       success: true,
       data: expenses,
       count: expenses.length,
-      message: 'Gastos obtenidos'
+      message: 'Gastos obtenidos',
     });
-
   } catch (error) {
     next(error);
   }
@@ -313,17 +308,17 @@ exports.getExpenseById = async (req, res, next) => {
         account: true,
         category: true,
         card: {
-          include: { card: true }
+          include: { card: true },
         },
-        installments: true
-      }
+        installments: true,
+      },
     });
 
     if (!expense) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Gasto no encontrado'
+        message: 'Gasto no encontrado',
       });
     }
 
@@ -331,16 +326,15 @@ exports.getExpenseById = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para ver este gasto'
+        message: 'No tienes permiso para ver este gasto',
       });
     }
 
     res.status(200).json({
       success: true,
       data: expense,
-      message: 'Gasto obtenido'
+      message: 'Gasto obtenido',
     });
-
   } catch (error) {
     next(error);
   }
@@ -358,14 +352,14 @@ exports.updateExpense = async (req, res, next) => {
     // Get current expense
     const expense = await prisma.expense.findUnique({
       where: { id: parseInt(id) },
-      include: { account: true }
+      include: { account: true },
     });
 
     if (!expense) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Gasto no encontrado'
+        message: 'Gasto no encontrado',
       });
     }
 
@@ -373,7 +367,7 @@ exports.updateExpense = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para modificar este gasto'
+        message: 'No tienes permiso para modificar este gasto',
       });
     }
 
@@ -384,7 +378,7 @@ exports.updateExpense = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           error: 'INVALID_AMOUNT',
-          message: 'El monto debe ser mayor a 0'
+          message: 'El monto debe ser mayor a 0',
         });
       }
       updateData.amount = parseFloat(amount);
@@ -397,18 +391,17 @@ exports.updateExpense = async (req, res, next) => {
       include: {
         category: true,
         card: {
-          include: { card: true }
+          include: { card: true },
         },
-        installments: true
-      }
+        installments: true,
+      },
     });
 
     res.status(200).json({
       success: true,
       data: updatedExpense,
-      message: 'Gasto actualizado'
+      message: 'Gasto actualizado',
     });
-
   } catch (error) {
     next(error);
   }
@@ -427,15 +420,15 @@ exports.deleteExpense = async (req, res, next) => {
       include: {
         account: true,
         card: true,
-        installments: true
-      }
+        installments: true,
+      },
     });
 
     if (!expense) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Gasto no encontrado'
+        message: 'Gasto no encontrado',
       });
     }
 
@@ -443,14 +436,14 @@ exports.deleteExpense = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para eliminar este gasto'
+        message: 'No tienes permiso para eliminar este gasto',
       });
     }
 
     // If was an expense with debit card, restore the salary
     if (expense.card && expense.paymentMethod === 'card') {
       const cardRecord = await prisma.card.findUnique({
-        where: { id: expense.card.cardId }
+        where: { id: expense.card.cardId },
       });
 
       if (cardRecord && cardRecord.type === 'debit') {
@@ -458,23 +451,22 @@ exports.deleteExpense = async (req, res, next) => {
           where: { id: cardRecord.id },
           data: {
             balance: {
-              increment: expense.amount
-            }
-          }
+              increment: expense.amount,
+            },
+          },
         });
       }
     }
 
-    // The installments are deleted on cascade
+    // The totalInstallments are deleted on cascade
     await prisma.expense.delete({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id) },
     });
 
     res.status(200).json({
       success: true,
-      message: 'Gasto eliminado correctamente'
+      message: 'Gasto eliminado correctamente',
     });
-
   } catch (error) {
     next(error);
   }

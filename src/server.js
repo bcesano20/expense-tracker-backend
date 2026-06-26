@@ -31,12 +31,12 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend funcionando ✅' });
 });
 
-app.use((err, req, res, next) => {
+app.use((err, req, res) => {
   console.error(err);
   res.status(500).json({
     success: false,
     error: 'SERVER_ERROR',
-    message: err.message || 'Error interno del servidor'
+    message: err.message || 'Error interno del servidor',
   });
 });
 

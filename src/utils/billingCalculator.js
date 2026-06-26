@@ -1,9 +1,9 @@
 /**
  * Calculate in which month should the expense be billed?
- * 
+ *
  * Rule: If the billing cycle ends on the 25th and the purchase is made on the 26th,
  * then it is billed the following month
- * 
+ *
  * @param {Date} expenseDate
  * @param {Number} cardCloseDay
  * @returns {Object} { billingMonth: 1-12, billingYear: 2026 }

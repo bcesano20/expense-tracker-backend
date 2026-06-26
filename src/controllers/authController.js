@@ -41,7 +41,7 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // password encryptation    
+    // password encryptation
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create User
@@ -56,11 +56,9 @@ exports.register = async (req, res, next) => {
     });
 
     // Create JWT
-    const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
+      expiresIn: '7d',
+    });
 
     res.status(201).json({
       success: true,
@@ -115,11 +113,9 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, {
+      expiresIn: '7d',
+    });
 
     res.status(200).json({
       success: true,
@@ -137,7 +133,7 @@ exports.login = async (req, res, next) => {
   }
 };
 
-// Get User Profile 
+// Get User Profile
 exports.getProfile = async (req, res, next) => {
   try {
     const userId = req.user.id;

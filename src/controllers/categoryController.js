@@ -12,25 +12,23 @@ exports.createCategory = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'El nombre y color de la categoria son requeridos'
+        message: 'El nombre y color de la categoria son requeridos',
       });
     }
-
 
     const category = await prisma.category.create({
       data: {
         name,
         color,
         userId,
-      }
+      },
     });
 
     res.status(201).json({
       success: true,
       data: category,
-      message: 'Categoria creada exitosamente'
+      message: 'Categoria creada exitosamente',
     });
-
   } catch (error) {
     next(error);
   }
@@ -51,7 +49,6 @@ exports.getCategories = async (req, res, next) => {
       data: categories,
       message: 'Categorías obtenidas exitosamente',
     });
-
   } catch (error) {
     next(error);
   }
@@ -97,7 +94,6 @@ exports.updateCategory = async (req, res, next) => {
       data: updatedCategory,
       message: 'Categoría actualizada exitosamente',
     });
-
   } catch (error) {
     next(error);
   }
