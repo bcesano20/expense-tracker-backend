@@ -331,9 +331,7 @@ exports.getCategoryAnalysis = async (req, res, next) => {
       success: true,
       data: {
         period: `Last ${monthCount} months`,
-        totalSpent: parseFloat(
-          analysis.reduce((sum, cat) => sum + cat.periodTotal, 0).toFixed(2)
-        ),
+        totalSpent: parseFloat(analysis.reduce((sum, cat) => sum + cat.periodTotal, 0).toFixed(2)),
         categories: analysis,
       },
       message: 'Análisis por categoría generado',

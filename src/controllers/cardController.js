@@ -12,20 +12,20 @@ exports.createCard = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'La cuenta, el nombre, banco, tipo y red de la tarjeta son requeridos'
+        message: 'La cuenta, el nombre, banco, tipo y red de la tarjeta son requeridos',
       });
     }
 
     // Check that the account exists and is user's property
     const account = await prisma.account.findUnique({
-      where: { id: parseInt(accountId) }
+      where: { id: parseInt(accountId) },
     });
 
     if (!account) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Cuenta no encontrada'
+        message: 'Cuenta no encontrada',
       });
     }
 
@@ -33,7 +33,7 @@ exports.createCard = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para agregar tarjetas a esta cuenta'
+        message: 'No tienes permiso para agregar tarjetas a esta cuenta',
       });
     }
 
@@ -42,7 +42,7 @@ exports.createCard = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'Las tarjetas de crédito requieren un día de cierre'
+        message: 'Las tarjetas de crédito requieren un día de cierre',
       });
     }
 
@@ -50,7 +50,7 @@ exports.createCard = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'VALIDATION_ERROR',
-        message: 'Las tarjetas de débito requieren un saldo inicial'
+        message: 'Las tarjetas de débito requieren un saldo inicial',
       });
     }
 
@@ -62,16 +62,15 @@ exports.createCard = async (req, res, next) => {
         type,
         network,
         closeDay: type === 'credit' ? parseInt(closeDay) : null,
-        balance: type === 'debit' ? parseFloat(balance) : null
-      }
+        balance: type === 'debit' ? parseFloat(balance) : null,
+      },
     });
 
     res.status(201).json({
       success: true,
       data: card,
-      message: 'Tarjeta creada exitosamente'
+      message: 'Tarjeta creada exitosamente',
     });
-
   } catch (error) {
     next(error);
   }
@@ -85,14 +84,14 @@ exports.getCardsFromAccount = async (req, res, next) => {
 
     // Check account exists and user's permisson
     const account = await prisma.account.findUnique({
-      where: { id: parseInt(accountId) }
+      where: { id: parseInt(accountId) },
     });
 
     if (!account) {
       return res.statususerId(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Cuenta no encontrada'
+        message: 'Cuenta no encontrada',
       });
     }
 
@@ -100,20 +99,19 @@ exports.getCardsFromAccount = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para ver las tarjetas de esta cuenta'
+        message: 'No tienes permiso para ver las tarjetas de esta cuenta',
       });
     }
 
     const cards = await prisma.card.findMany({
-      where: { accountId: parseInt(accountId) }
+      where: { accountId: parseInt(accountId) },
     });
 
     res.status(200).json({
       success: true,
       data: cards,
-      message: 'Tarjetas obtenidas'
+      message: 'Tarjetas obtenidas',
     });
-
   } catch (error) {
     next(error);
   }
@@ -129,14 +127,14 @@ exports.updateCard = async (req, res, next) => {
     // Get Cards by the Id
     const card = await prisma.card.findUnique({
       where: { id: parseInt(id) },
-      include: { account: true }
+      include: { account: true },
     });
 
     if (!card) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Tarjeta no encontrada'
+        message: 'Tarjeta no encontrada',
       });
     }
 
@@ -144,7 +142,7 @@ exports.updateCard = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para modificar esta tarjeta'
+        message: 'No tienes permiso para modificar esta tarjeta',
       });
     }
 
@@ -159,15 +157,14 @@ exports.updateCard = async (req, res, next) => {
 
     const updatedCard = await prisma.card.update({
       where: { id: parseInt(id) },
-      data: updateData
+      data: updateData,
     });
 
     res.status(200).json({
       success: true,
       data: updatedCard,
-      message: 'Tarjeta actualizada'
+      message: 'Tarjeta actualizada',
     });
-
   } catch (error) {
     next(error);
   }
@@ -181,14 +178,14 @@ exports.deleteCard = async (req, res, next) => {
 
     const card = await prisma.card.findUnique({
       where: { id: parseInt(id) },
-      include: { account: true }
+      include: { account: true },
     });
 
     if (!card) {
       return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
-        message: 'Tarjeta no encontrada'
+        message: 'Tarjeta no encontrada',
       });
     }
 
@@ -196,19 +193,18 @@ exports.deleteCard = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         error: 'FORBIDDEN',
-        message: 'No tienes permiso para eliminar esta tarjeta'
+        message: 'No tienes permiso para eliminar esta tarjeta',
       });
     }
 
     await prisma.card.delete({
-      where: { id: parseInt(id) }
+      where: { id: parseInt(id) },
     });
 
     res.status(200).json({
       success: true,
-      message: 'Tarjeta eliminada correctamente'
+      message: 'Tarjeta eliminada correctamente',
     });
-
   } catch (error) {
     next(error);
   }
