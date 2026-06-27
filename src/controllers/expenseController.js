@@ -88,7 +88,7 @@ exports.createExpense = async (req, res, next) => {
 
         // If there are totalInstallments set the number
         if (totalInstallments && totalInstallments > 1) {
-          expenseData.paymentMethod = `card-totalInstallments-${totalInstallments}`;
+          expenseData.paymentMethod = `card-installments-${totalInstallments}`;
         } else {
           expenseData.paymentMethod = 'card';
         }
@@ -97,18 +97,17 @@ exports.createExpense = async (req, res, next) => {
           cardId: parseInt(cardId),
         };
 
-        // Create totalInstallments if is in more than one installment
+        // Payment starts the month AFTER the billing/statement month
         if (totalInstallments && totalInstallments > 1) {
           const installmentAmount = parseFloat(amount) / totalInstallments;
 
           for (let i = 1; i <= totalInstallments; i++) {
-            let paymentMonth = billingMonth + (i - 1);
+            let paymentMonth = billingMonth + i; // +i so first payment is billingMonth+1
             let paymentYear = billingYear;
 
-            // If december ends, adjust the year
-            if (paymentMonth > 12) {
-              paymentMonth = paymentMonth - 12;
-              paymentYear += Math.floor((billingMonth + i - 1) / 12);
+            while (paymentMonth > 12) {
+              paymentMonth -= 12;
+              paymentYear += 1;
             }
 
             totalInstallmentsToCreate.push({
@@ -121,13 +120,20 @@ exports.createExpense = async (req, res, next) => {
             });
           }
         } else {
-          // Expense in just one installment
+          // Single installment — paid the month after the statement closes
+          let paymentMonth = billingMonth + 1;
+          let paymentYear = billingYear;
+          if (paymentMonth > 12) {
+            paymentMonth = 1;
+            paymentYear += 1;
+          }
+
           totalInstallmentsToCreate.push({
             installmentNumber: 1,
             totalInstallments: 1,
             installmentAmount: parseFloat(amount),
-            paymentMonth: billingMonth,
-            paymentYear: billingYear,
+            paymentMonth,
+            paymentYear,
             cardId: parseInt(cardId),
           });
         }
