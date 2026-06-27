@@ -52,6 +52,7 @@ exports.getMonthlyReport = async (req, res, next) => {
         billingYear: yearNum,
       },
       include: {
+        category: true,
         card: {
           include: { card: true },
         },
@@ -65,10 +66,11 @@ exports.getMonthlyReport = async (req, res, next) => {
     // 3. GROUP BY CATEGORY
     const expensesByCategory = {};
     expenses.forEach((exp) => {
-      if (!expensesByCategory[exp.category]) {
-        expensesByCategory[exp.category] = 0;
+      const categoryName = exp.category?.name ?? 'Sin categoría';
+      if (!expensesByCategory[categoryName]) {
+        expensesByCategory[categoryName] = 0;
       }
-      expensesByCategory[exp.category] += exp.amount;
+      expensesByCategory[categoryName] += exp.amount;
     });
 
     // 4. GROUP BY PAYMENT METHOD
@@ -151,7 +153,7 @@ exports.getMonthlyReport = async (req, res, next) => {
           description: exp.description,
           amount: exp.amount,
           date: exp.date,
-          category: exp.category,
+          category: exp.category ? { id: exp.category.id, name: exp.category.name, color: exp.category.color } : null,
           paymentMethod: exp.paymentMethod,
           card: exp.card ? exp.card.card.name : null,
         })),
@@ -293,26 +295,29 @@ exports.getCategoryAnalysis = async (req, res, next) => {
           gte: new Date(now.getFullYear(), now.getMonth() - monthCount, 1),
         },
       },
+      include: { category: true },
     });
 
     // Group by category and sum amounts
     const categories = {};
     expenses.forEach((exp) => {
-      if (!categories[exp.category]) {
-        categories[exp.category] = {
-          category: exp.category,
+      const categoryKey = exp.category?.name ?? 'Sin categoría';
+      if (!categories[categoryKey]) {
+        categories[categoryKey] = {
+          category: categoryKey,
+          color: exp.category?.color ?? null,
           months: {},
           periodTotal: 0,
         };
       }
 
       const monthKey = `${exp.billingMonth}/${exp.billingYear}`;
-      if (!categories[exp.category].months[monthKey]) {
-        categories[exp.category].months[monthKey] = 0;
+      if (!categories[categoryKey].months[monthKey]) {
+        categories[categoryKey].months[monthKey] = 0;
       }
 
-      categories[exp.category].months[monthKey] += exp.amount;
-      categories[exp.category].periodTotal += exp.amount;
+      categories[categoryKey].months[monthKey] += exp.amount;
+      categories[categoryKey].periodTotal += exp.amount;
     });
 
     // Sort by total descending and format response
@@ -440,7 +445,7 @@ exports.getCardDetails = async (req, res, next) => {
 // ============================================
 exports.getMonthComparison = async (req, res, next) => {
   try {
-    const { accountId } = req.query;
+    const { accountId, month, year } = req.query;
     const userId = req.user.id;
 
     if (!accountId) {
@@ -464,9 +469,10 @@ exports.getMonthComparison = async (req, res, next) => {
       });
     }
 
+    // Use provided month/year or fall back to current date
     const now = new Date();
-    const currentMonth = now.getMonth() + 1;
-    const currentYear = now.getFullYear();
+    const currentMonth = month ? parseInt(month) : now.getMonth() + 1;
+    const currentYear = year ? parseInt(year) : now.getFullYear();
 
     // Calculate previous month (handles January → December rollover)
     let previousMonth = currentMonth - 1;
