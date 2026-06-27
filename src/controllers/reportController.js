@@ -153,7 +153,9 @@ exports.getMonthlyReport = async (req, res, next) => {
           description: exp.description,
           amount: exp.amount,
           date: exp.date,
-          category: exp.category ? { id: exp.category.id, name: exp.category.name, color: exp.category.color } : null,
+          category: exp.category
+            ? { id: exp.category.id, name: exp.category.name, color: exp.category.color }
+            : null,
           paymentMethod: exp.paymentMethod,
           card: exp.card ? exp.card.card.name : null,
         })),
