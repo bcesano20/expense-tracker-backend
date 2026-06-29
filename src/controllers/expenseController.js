@@ -294,9 +294,9 @@ exports.getExpense = async (req, res, next) => {
         },
         orderBy: orderByClause,
         skip,
-        take: limitNum
+        take: limitNum,
       }),
-      prisma.expense.count({ where }) // Total count
+      prisma.expense.count({ where }), // Total count
     ]);
 
     // Calculate pagination information
@@ -315,7 +315,7 @@ exports.getExpense = async (req, res, next) => {
         hasNextPage,
         hasPreviousPage,
       },
-      message: 'Gastos obtenidos'
+      message: 'Gastos obtenidos',
     });
   } catch (error) {
     next(error);
