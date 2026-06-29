@@ -235,7 +235,7 @@ exports.createExpense = async (req, res, next) => {
 // ============================================
 exports.getExpense = async (req, res, next) => {
   try {
-    const { accountId, month, year, category, orderBy } = req.query;
+    const { accountId, month, year, category, orderBy, page = 1, limit = 10 } = req.query;
     const userId = req.user.id;
 
     const account = await prisma.account.findUnique({
@@ -266,6 +266,11 @@ exports.getExpense = async (req, res, next) => {
       where.categoryId = parseInt(category);
     }
 
+    // Pagination
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(limit) || 10)); // 100 max
+    const skip = (pageNum - 1) * limitNum;
+
     // Order
     let orderByClause = { date: 'desc' }; // by default, the more recent first
     if (orderBy === 'monto-asc') {
@@ -276,23 +281,40 @@ exports.getExpense = async (req, res, next) => {
       orderByClause = { date: 'asc' };
     }
 
-    // Get expenses
-    const expenses = await prisma.expense.findMany({
-      where,
-      include: {
-        category: true,
-        card: {
-          include: { card: true },
+    // Get expenses with pagination
+    const [expenses, total] = await Promise.all([
+      prisma.expense.findMany({
+        where,
+        include: {
+          category: true,
+          card: {
+            include: { card: true },
+          },
+          installments: true,
         },
-        installments: true,
-      },
-      orderBy: orderByClause,
-    });
+        orderBy: orderByClause,
+        skip,
+        take: limitNum,
+      }),
+      prisma.expense.count({ where }), // Total count
+    ]);
+
+    // Calculate pagination information
+    const totalPages = Math.ceil(total / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPreviousPage = pageNum > 1;
 
     res.status(200).json({
       success: true,
       data: expenses,
-      count: expenses.length,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages,
+        hasNextPage,
+        hasPreviousPage,
+      },
       message: 'Gastos obtenidos',
     });
   } catch (error) {

@@ -1,4 +1,4 @@
-name: LINT
+name: Lint & Format
 
 on:
   push:
