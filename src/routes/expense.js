@@ -1,4 +1,3 @@
-// src/routes/expenses.js
 const express = require('express');
 const expenseController = require('../controllers/expenseController');
 const authMiddleware = require('../middleware/authMiddleware');
