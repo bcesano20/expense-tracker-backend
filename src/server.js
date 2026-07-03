@@ -12,6 +12,7 @@ const cardsRoutes = require('./routes/card');
 const expensesRoutes = require('./routes/expense');
 const reportsRoutes = require('./routes/report');
 const categoryRoutes = require('./routes/category');
+const incomesRoutes = require('./routes/income');
 
 // Middlewares
 app.use(cors());
@@ -25,6 +26,7 @@ app.use('/api/cards', cardsRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/incomes', incomesRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
