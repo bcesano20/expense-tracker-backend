@@ -13,6 +13,7 @@ const expensesRoutes = require('./routes/expense');
 const reportsRoutes = require('./routes/report');
 const categoryRoutes = require('./routes/category');
 const incomesRoutes = require('./routes/income');
+const budgetsRoutes = require('./routes/budget');
 
 // Middlewares
 app.use(cors());
@@ -27,6 +28,7 @@ app.use('/api/expenses', expensesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/incomes', incomesRoutes);
+app.use('/api/budgets', budgetsRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
