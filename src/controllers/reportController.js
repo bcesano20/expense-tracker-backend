@@ -1,4 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
+const { ERROR_MESSAGES } = require('../helpers/constants');
 
 const prisma = new PrismaClient();
 
@@ -436,6 +437,218 @@ exports.getCardDetails = async (req, res, next) => {
         cardsWithInstallmentsCount: cardsWithInstallments.length,
       },
       message: 'Detalles de tarjetas generados',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================
+// CATEGORY BUDGET STATUS
+// ============================================
+exports.getCategoryBudgetStatus = async (req, res, next) => {
+  try {
+    const { accountId, categoryId, month, year } = req.query;
+    const userId = req.user.id;
+
+    if (!accountId || !categoryId || !month || !year) {
+      return res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'accountId, categoryId, mes y año son requeridos',
+      });
+    }
+
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
+
+    if (monthNum < 1 || monthNum > 12) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_MONTH',
+        message: ERROR_MESSAGES.INVALID_MONTH,
+      });
+    }
+
+    // Validate account ownership
+    const account = await prisma.account.findUnique({
+      where: { id: parseInt(accountId) },
+    });
+
+    if (!account || account.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: ERROR_MESSAGES.REPORTS_ACCOUNT_PERMISSION,
+      });
+    }
+
+    // Run budget lookup and expense aggregation in parallel
+    const [budget, expenses] = await Promise.all([
+      prisma.budget.findUnique({
+        where: {
+          accountId_categoryId_month_year: {
+            accountId: parseInt(accountId),
+            categoryId: parseInt(categoryId),
+            month: monthNum,
+            year: yearNum,
+          },
+        },
+        include: { category: true },
+      }),
+      prisma.expense.findMany({
+        where: {
+          accountId: parseInt(accountId),
+          categoryId: parseInt(categoryId),
+          billingMonth: monthNum,
+          billingYear: yearNum,
+        },
+        include: { category: true },
+      }),
+    ]);
+
+    const totalSpent = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+
+    let status;
+    let budgetSummary;
+
+    if (!budget) {
+      status = 'NO_BUDGET';
+      budgetSummary = null;
+    } else if (budget.amount !== null) {
+      // Fixed budget
+      status = totalSpent > budget.amount ? 'OVER_BUDGET' : 'UNDER_BUDGET';
+      budgetSummary = {
+        type: 'fixed',
+        budgetAmount: budget.amount,
+        remaining: parseFloat((budget.amount - totalSpent).toFixed(2)),
+        usagePercentage: parseFloat(((totalSpent / budget.amount) * 100).toFixed(2)),
+      };
+    } else {
+      // Range budget
+      if (totalSpent > budget.maxAmount) {
+        status = 'OVER_BUDGET';
+      } else if (totalSpent < budget.minAmount) {
+        status = 'UNDER_BUDGET';
+      } else {
+        status = 'WITHIN_RANGE';
+      }
+      budgetSummary = {
+        type: 'range',
+        minAmount: budget.minAmount,
+        maxAmount: budget.maxAmount,
+        remainingToMax: parseFloat((budget.maxAmount - totalSpent).toFixed(2)),
+        usagePercentage: parseFloat(((totalSpent / budget.maxAmount) * 100).toFixed(2)),
+      };
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        period: { month: monthNum, year: yearNum },
+        category: budget?.category ?? expenses[0]?.category ?? null,
+        totalSpent: parseFloat(totalSpent.toFixed(2)),
+        expenseCount: expenses.length,
+        budget: budgetSummary,
+        status,
+      },
+      message: 'Estado del presupuesto por categoría generado',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============================================
+// INCOME VS EXPENSES RATIO
+// ============================================
+exports.getIncomeVsExpenses = async (req, res, next) => {
+  try {
+    const { accountId, month, year } = req.query;
+    const userId = req.user.id;
+
+    if (!accountId || !month || !year) {
+      return res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: 'accountId, mes y año son requeridos',
+      });
+    }
+
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
+
+    if (monthNum < 1 || monthNum > 12) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_MONTH',
+        message: ERROR_MESSAGES.INVALID_MONTH,
+      });
+    }
+
+    // Validate account ownership
+    const account = await prisma.account.findUnique({
+      where: { id: parseInt(accountId) },
+    });
+
+    if (!account || account.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: ERROR_MESSAGES.REPORTS_ACCOUNT_PERMISSION,
+      });
+    }
+
+    // Fetch incomes and expenses in parallel
+    const [incomes, expenses] = await Promise.all([
+      prisma.income.findMany({
+        where: {
+          accountId: parseInt(accountId),
+          date: {
+            gte: new Date(yearNum, monthNum - 1, 1),
+            lt: new Date(yearNum, monthNum, 1),
+          },
+        },
+      }),
+      prisma.expense.findMany({
+        where: {
+          accountId: parseInt(accountId),
+          billingMonth: monthNum,
+          billingYear: yearNum,
+        },
+      }),
+    ]);
+
+    const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
+    const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const balance = totalIncome - totalExpenses;
+    const expensePercentage =
+      totalIncome === 0 ? null : parseFloat(((totalExpenses / totalIncome) * 100).toFixed(2));
+
+    let status;
+    if (totalIncome === 0) {
+      status = 'NO_INCOME';
+    } else if (totalExpenses > totalIncome) {
+      status = 'DEFICIT';
+    } else if (totalExpenses === totalIncome) {
+      status = 'BALANCED';
+    } else {
+      status = 'SURPLUS';
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        period: { month: monthNum, year: yearNum },
+        totalIncome: parseFloat(totalIncome.toFixed(2)),
+        totalExpenses: parseFloat(totalExpenses.toFixed(2)),
+        balance: parseFloat(balance.toFixed(2)),
+        expensePercentage,
+        incomeCount: incomes.length,
+        expenseCount: expenses.length,
+        status,
+      },
+      message: 'Relación ingresos/gastos generada',
     });
   } catch (error) {
     next(error);
