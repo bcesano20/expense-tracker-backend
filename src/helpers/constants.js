@@ -22,6 +22,7 @@ const ERROR_MESSAGES = {
   BUDGET_CATEGORY_PERIOD_ALREADY_EXISTS:
     'Ya existe un presupuesto para esta categoría en el período indicado',
   BUDGET_NOT_FOUND: 'Presupuesto no encontrado',
+  REPORTS_ACCOUNT_PERMISSION: 'No tienes permisos para ver ni operar reportes en esta cuenta',
 };
 
 module.exports = { ERROR_MESSAGES };
