@@ -69,9 +69,9 @@ exports.getMonthlyReport = async (req, res, next) => {
     expenses.forEach((exp) => {
       const categoryName = exp.category?.name ?? 'Sin categoría';
       if (!expensesByCategory[categoryName]) {
-        expensesByCategory[categoryName] = 0;
+        expensesByCategory[categoryName] = { total: 0, color: exp.category?.color ?? null };
       }
-      expensesByCategory[categoryName] += exp.amount;
+      expensesByCategory[categoryName].total += exp.amount;
     });
 
     // 4. GROUP BY PAYMENT METHOD
@@ -139,10 +139,11 @@ exports.getMonthlyReport = async (req, res, next) => {
           categoryCount: Object.keys(expensesByCategory).length,
           cardCount: Object.keys(installmentsByCard).length,
         },
-        expensesByCategory: Object.entries(expensesByCategory).map(([category, total]) => ({
+        expensesByCategory: Object.entries(expensesByCategory).map(([category, data]) => ({
           category,
-          total: parseFloat(total.toFixed(2)),
-          percentage: parseFloat(((total / totalSpent) * 100).toFixed(2)),
+          color: data.color,
+          total: parseFloat(data.total.toFixed(2)),
+          percentage: parseFloat(((data.total / totalSpent) * 100).toFixed(2)),
         })),
         expensesByPaymentMethod: Object.entries(expensesByPaymentMethod).map(([method, data]) => ({
           method,
