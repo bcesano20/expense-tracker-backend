@@ -17,6 +17,7 @@ exports.createExpense = async (req, res, next) => {
       paymentMethod,
       cardId,
       totalInstallments,
+      notes,
     } = req.body;
     const userId = req.user.id;
 
@@ -58,6 +59,7 @@ exports.createExpense = async (req, res, next) => {
       date: new Date(date),
       categoryId: parseInt(categoryId),
       paymentMethod,
+      notes: notes ? notes.trim() : null,
     };
 
     let cardData = null;
@@ -375,7 +377,7 @@ exports.updateExpense = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { description, amount, categoryId } = req.body;
+    const { description, amount, categoryId, notes } = req.body;
 
     // Get current expense
     const expense = await prisma.expense.findUnique({
@@ -412,6 +414,7 @@ exports.updateExpense = async (req, res, next) => {
       updateData.amount = parseFloat(amount);
     }
     if (categoryId) updateData.categoryId = parseInt(categoryId);
+    if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
     const updatedExpense = await prisma.expense.update({
       where: { id: parseInt(id) },

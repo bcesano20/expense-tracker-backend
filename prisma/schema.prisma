@@ -67,6 +67,7 @@ model Expense {
   billingYear     Int       // year when it is billed
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  notes           String?   // Some extra description
 
   card            ExpenseCard?
   installments    Installment[]
