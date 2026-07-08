@@ -1,6 +1,6 @@
-# Expense Tracker Backend
+# SpendWise Backend
 
-REST API for personal expense management. Users can register expenses by payment method (cash, transfer, credit/debit card), manage installment plans, organize expenses by category, and generate monthly reports.
+REST API for personal finance management. Users can register expenses by payment method (cash, transfer, credit/debit card), manage installment plans, track incomes, set budgets per category, and generate monthly reports.
 
 ## Tech Stack
 
@@ -29,7 +29,7 @@ npm install
 Create a `.env` file at the project root:
 
 ```bash
-DATABASE_URL="postgresql://postgres:your_password@localhost:5432/expense_tracker"
+DATABASE_URL="postgresql://postgres:your_password@localhost:5432/spendwise"
 JWT_SECRET="your_secret_key"
 PORT=3001
 NODE_ENV=development
@@ -39,7 +39,7 @@ NODE_ENV=development
 
 ```bash
 # Create the database (run once in psql)
-CREATE DATABASE expense_tracker;
+CREATE DATABASE spendwise;
 
 # Run migrations
 npm run prisma:migrate
@@ -90,6 +90,8 @@ expense-tracker-backend/
 │   │   ├── cardController.js
 │   │   ├── categoryController.js
 │   │   ├── expenseController.js
+│   │   ├── incomeController.js
+│   │   ├── budgetController.js
 │   │   └── reportController.js
 │   ├── routes/
 │   │   ├── auth.js
@@ -98,6 +100,8 @@ expense-tracker-backend/
 │   │   ├── card.js
 │   │   ├── category.js
 │   │   ├── expense.js
+│   │   ├── income.js
+│   │   ├── budget.js
 │   │   └── report.js
 │   ├── middleware/
 │   │   └── authMiddleware.js
@@ -115,6 +119,8 @@ expense-tracker-backend/
 ```
 
 ## API Endpoints
+
+All endpoints require a `Bearer` token in the `Authorization` header except `/api/auth/register` and `/api/auth/login`.
 
 ### Auth
 ```
@@ -163,13 +169,33 @@ PUT    /api/expenses/:id
 DELETE /api/expenses/:id
 ```
 
+### Incomes
+```
+POST   /api/incomes
+GET    /api/incomes            ?accountId&month&year&source&orderBy&page&limit
+GET    /api/incomes/:id
+PUT    /api/incomes/:id
+DELETE /api/incomes/:id
+```
+
+### Budgets
+```
+POST   /api/budgets
+GET    /api/budgets            ?accountId&month&year&categoryId
+GET    /api/budgets/:id
+PUT    /api/budgets/:id
+DELETE /api/budgets/:id
+```
+
 ### Reports
 ```
-GET    /api/reports/monthly    ?accountId&month&year
-GET    /api/reports/summary    ?accountId
-GET    /api/reports/categories ?accountId&months
-GET    /api/reports/cards      ?accountId&month&year
-GET    /api/reports/comparison ?accountId&month&year
+GET    /api/reports/monthly       ?accountId&month&year
+GET    /api/reports/summary       ?accountId
+GET    /api/reports/category      ?accountId&months
+GET    /api/reports/cards         ?accountId&month&year
+GET    /api/reports/comparison    ?accountId&month&year
+GET    /api/reports/budget-status ?accountId&categoryId&month&year
+GET    /api/reports/income-ratio  ?accountId&month&year
 ```
 
 ## Available Scripts
