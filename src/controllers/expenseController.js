@@ -1,4 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
+
 const { calculateBillingMonth } = require('../utils/billingCalculator');
 
 const prisma = new PrismaClient();
@@ -377,7 +378,7 @@ exports.updateExpense = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { description, amount, categoryId, notes } = req.body;
+    const { description, amount, categoryId, notes, date } = req.body;
 
     // Get current expense
     const expense = await prisma.expense.findUnique({
@@ -414,6 +415,7 @@ exports.updateExpense = async (req, res, next) => {
       updateData.amount = parseFloat(amount);
     }
     if (categoryId) updateData.categoryId = parseInt(categoryId);
+    if (date) updateData.date = new Date(date);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
     const updatedExpense = await prisma.expense.update({
