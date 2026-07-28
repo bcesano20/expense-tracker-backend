@@ -1,6 +1,7 @@
 const { PrismaClient } = require('@prisma/client');
 
 const { calculateBillingMonth } = require('../utils/billingCalculator');
+const { ERROR_MESSAGES } = require('../helpers/constants');
 
 const prisma = new PrismaClient();
 
@@ -141,11 +142,10 @@ exports.createExpense = async (req, res, next) => {
           });
         }
       } else if (card.type === 'debit') {
-        // Debit card: Billing at the current month and reduce from the salary
-        const { billingMonth, billingYear } = calculateBillingMonth(
-          new Date(date),
-          25 // default day for debit
-        );
+        // Debit card: billed in the same month as the expense date
+        const expenseDate = new Date(date);
+        const billingMonth = expenseDate.getMonth() + 1;
+        const billingYear = expenseDate.getFullYear();
 
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
@@ -378,12 +378,14 @@ exports.updateExpense = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { description, amount, categoryId, notes, date } = req.body;
+    const { description, amount, categoryId, notes, date, paymentMethod, cardId } = req.body;
 
-    // Get current expense
     const expense = await prisma.expense.findUnique({
       where: { id: parseInt(id) },
-      include: { account: true },
+      include: {
+        account: true,
+        card: true,
+      },
     });
 
     if (!expense) {
@@ -417,6 +419,130 @@ exports.updateExpense = async (req, res, next) => {
     if (categoryId) updateData.categoryId = parseInt(categoryId);
     if (date) updateData.date = new Date(date);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
+
+    // Handle payment method change
+    if (paymentMethod && paymentMethod !== expense.paymentMethod) {
+      const oldMethod = expense.paymentMethod;
+      const newMethod = paymentMethod;
+      const NON_CARD_METHODS = ['cash', 'transfer', 'other'];
+
+      // Block changes involving credit card installments
+      if (
+        oldMethod.startsWith('card-installments-') ||
+        newMethod.startsWith('card-installments-')
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'UNSUPPORTED_OPERATION',
+          message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION_CARD,
+        });
+      }
+
+      if (oldMethod === 'card') {
+        // Determine if old card was debit or credit
+        if (!expense.card) {
+          return res.status(400).json({
+            success: false,
+            error: 'UNSUPPORTED_OPERATION',
+            message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION,
+          });
+        }
+
+        const existingCard = await prisma.card.findUnique({
+          where: { id: expense.card.cardId },
+        });
+
+        if (existingCard.type === 'credit') {
+          return res.status(400).json({
+            success: false,
+            error: 'UNSUPPORTED_OPERATION',
+            message: ERROR_MESSAGES.UNSUPORTED_UPDATE_CREDIT_CARD,
+          });
+        }
+
+        // Debit card → non-card: restore balance and remove card records
+        if (!NON_CARD_METHODS.includes(newMethod)) {
+          return res.status(400).json({
+            success: false,
+            error: 'UNSUPPORTED_OPERATION',
+            message: ERROR_MESSAGES.DELETE_EXPENSE_CREATE_AGAIN,
+          });
+        }
+
+        await prisma.card.update({
+          where: { id: existingCard.id },
+          data: { balance: { increment: expense.amount } },
+        });
+
+        await prisma.installment.deleteMany({ where: { expenseId: expense.id } });
+        await prisma.expenseCard.delete({ where: { expenseId: expense.id } });
+
+        updateData.paymentMethod = newMethod;
+      } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === 'card') {
+        // Non-card → debit card
+        if (!cardId) {
+          return res.status(400).json({
+            success: false,
+            error: 'VALIDATION_ERROR',
+            message: 'cardId es requerido para cambiar a tarjeta',
+          });
+        }
+
+        const newCard = await prisma.card.findUnique({
+          where: { id: parseInt(cardId) },
+        });
+
+        if (!newCard || newCard.accountId !== expense.accountId) {
+          return res.status(404).json({
+            success: false,
+            error: 'CARD_NOT_FOUND',
+            message: ERROR_MESSAGES.CARD_NOT_FOUND,
+          });
+        }
+
+        if (newCard.type === 'credit') {
+          return res.status(400).json({
+            success: false,
+            error: 'UNSUPPORTED_OPERATION',
+            message: ERROR_MESSAGES.CREDIT_CARD_NOT_UPDATAED,
+          });
+        }
+
+        // Use updated date if provided, otherwise fall back to existing
+        const expenseDate = updateData.date ?? expense.date;
+        const billingMonth = expenseDate.getMonth() + 1;
+        const billingYear = expenseDate.getFullYear();
+        const finalAmount = updateData.amount ?? expense.amount;
+
+        await prisma.card.update({
+          where: { id: newCard.id },
+          data: { balance: { decrement: finalAmount } },
+        });
+
+        await prisma.expenseCard.create({
+          data: { expenseId: expense.id, cardId: newCard.id },
+        });
+
+        await prisma.installment.create({
+          data: {
+            expenseId: expense.id,
+            cardId: newCard.id,
+            installmentNumber: 1,
+            totalInstallments: 1,
+            installmentAmount: finalAmount,
+            paymentMonth: billingMonth,
+            paymentYear: billingYear,
+          },
+        });
+
+        updateData.paymentMethod = 'card';
+        updateData.billingMonth = billingMonth;
+        updateData.billingYear = billingYear;
+      } else if (NON_CARD_METHODS.includes(oldMethod) && NON_CARD_METHODS.includes(newMethod)) {
+        // Non-card to non-card: just update the field
+        updateData.paymentMethod = newMethod;
+      }
+    }
 
     const updatedExpense = await prisma.expense.update({
       where: { id: parseInt(id) },
