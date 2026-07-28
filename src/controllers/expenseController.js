@@ -427,7 +427,10 @@ exports.updateExpense = async (req, res, next) => {
       const NON_CARD_METHODS = ['cash', 'transfer', 'other'];
 
       // Block changes involving credit card installments
-      if (oldMethod.startsWith('card-installments-') || newMethod.startsWith('card-installments-')) {
+      if (
+        oldMethod.startsWith('card-installments-') ||
+        newMethod.startsWith('card-installments-')
+      ) {
         return res.status(400).json({
           success: false,
           error: 'UNSUPPORTED_OPERATION',
@@ -475,7 +478,6 @@ exports.updateExpense = async (req, res, next) => {
         await prisma.expenseCard.delete({ where: { expenseId: expense.id } });
 
         updateData.paymentMethod = newMethod;
-
       } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === 'card') {
         // Non-card → debit card
         if (!cardId) {
@@ -536,7 +538,6 @@ exports.updateExpense = async (req, res, next) => {
         updateData.paymentMethod = 'card';
         updateData.billingMonth = billingMonth;
         updateData.billingYear = billingYear;
-
       } else if (NON_CARD_METHODS.includes(oldMethod) && NON_CARD_METHODS.includes(newMethod)) {
         // Non-card to non-card: just update the field
         updateData.paymentMethod = newMethod;

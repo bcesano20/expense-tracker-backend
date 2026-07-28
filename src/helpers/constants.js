@@ -23,12 +23,14 @@ const ERROR_MESSAGES = {
     'Ya existe un presupuesto para esta categoría en el período indicado',
   BUDGET_NOT_FOUND: 'Presupuesto no encontrado',
   REPORTS_ACCOUNT_PERMISSION: 'No tienes permisos para ver ni operar reportes en esta cuenta',
-  UNSUPORTED_UPDATE_OPERATION_CARD: 'No se puede cambiar el método de pago de o hacia cuotas con tarjeta de crédito',
+  UNSUPORTED_UPDATE_OPERATION_CARD:
+    'No se puede cambiar el método de pago de o hacia cuotas con tarjeta de crédito',
   UNSUPORTED_UPDATE_OPERATION: 'No se puede cambiar el método de pago de este gasto',
-  UNSUPORTED_UPDATE_CREDIT_CARD: 'No se puede cambiar el método de pago de un gasto con tarjeta de crédito',
+  UNSUPORTED_UPDATE_CREDIT_CARD:
+    'No se puede cambiar el método de pago de un gasto con tarjeta de crédito',
   DELETE_EXPENSE_CREATE_AGAIN: 'Para cambiar de tarjeta elimina el gasto y créalo de nuevo',
   CARD_NOT_FOUND: 'Tarjeta no encontrada o no pertenece a esta cuenta',
-  CREDIT_CARD_NOT_UPDATAED: 'No se puede cambiar a tarjeta de crédito desde otro método de pago'
+  CREDIT_CARD_NOT_UPDATAED: 'No se puede cambiar a tarjeta de crédito desde otro método de pago',
 };
 
 module.exports = { ERROR_MESSAGES };
