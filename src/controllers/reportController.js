@@ -383,7 +383,7 @@ exports.getCardDetails = async (req, res, next) => {
     const yearNum = parseInt(year);
 
     const cards = await prisma.card.findMany({
-      where: { accountId: parseInt(accountId) },
+      where: { accountId: parseInt(accountId), type: 'credit' },
     });
 
     // Get installments due per card
