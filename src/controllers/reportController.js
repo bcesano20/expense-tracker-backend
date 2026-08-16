@@ -124,7 +124,13 @@ exports.getMonthlyReport = async (req, res, next) => {
       });
     });
 
-    // 7. RESPOND WITH FULL REPORT
+    // 7. TOTAL CARD PAYMENTS BY CARD TYPE (credit vs debit)
+    const totalCardPaymentsByType = Object.values(installmentsByCard).reduce((acc, card) => {
+      acc[card.cardType] = (acc[card.cardType] ?? 0) + card.totalDue;
+      return acc;
+    }, {});
+
+    // 8. RESPOND WITH FULL REPORT
     res.status(200).json({
       success: true,
       data: {
@@ -165,6 +171,13 @@ exports.getMonthlyReport = async (req, res, next) => {
         totalCardPayments: Object.values(installmentsByCard).reduce(
           (sum, card) => sum + card.totalDue,
           0
+        ),
+        totalCardPaymentsByType: Object.entries(totalCardPaymentsByType).reduce(
+          (acc, [type, total]) => {
+            acc[type] = parseFloat(total.toFixed(2));
+            return acc;
+          },
+          {}
         ),
       },
       message: `Reporte de ${monthNum}/${yearNum} generado`,
