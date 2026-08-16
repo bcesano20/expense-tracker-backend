@@ -35,7 +35,7 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend funcionando ✅' });
 });
 
-app.use((err, req, res) => {
+app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({
     success: false,
