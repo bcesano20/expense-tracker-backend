@@ -31,6 +31,8 @@ const ERROR_MESSAGES = {
   DELETE_EXPENSE_CREATE_AGAIN: 'Para cambiar de tarjeta elimina el gasto y créalo de nuevo',
   CARD_NOT_FOUND: 'Tarjeta no encontrada o no pertenece a esta cuenta',
   CREDIT_CARD_NOT_UPDATAED: 'No se puede cambiar a tarjeta de crédito desde otro método de pago',
+  CARD_CANCELLED: 'La tarjeta está cancelada y no se pueden registrar nuevos gastos con ella',
+  CARD_CANCEL_SUCCESS: 'Tarjeta cancelada correctamente',
 };
 
 module.exports = { ERROR_MESSAGES };

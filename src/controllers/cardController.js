@@ -1,4 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
+const { ERROR_MESSAGES } = require('../helpers/constants');
 
 const prisma = new PrismaClient();
 
@@ -88,7 +89,7 @@ exports.getCardsFromAccount = async (req, res, next) => {
     });
 
     if (!account) {
-      return res.statususerId(404).json({
+      return res.status(404).json({
         success: false,
         error: 'NOT_FOUND',
         message: 'Cuenta no encontrada',
@@ -103,9 +104,11 @@ exports.getCardsFromAccount = async (req, res, next) => {
       });
     }
 
-    const cards = await prisma.card.findMany({
-      where: { accountId: parseInt(accountId) },
-    });
+    const { active } = req.query;
+    const where = { accountId: parseInt(accountId) };
+    if (active === 'true') where.isActive = true;
+
+    const cards = await prisma.card.findMany({ where });
 
     res.status(200).json({
       success: true,
@@ -164,6 +167,56 @@ exports.updateCard = async (req, res, next) => {
       success: true,
       data: updatedCard,
       message: 'Tarjeta actualizada',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// CANCEL CARD (soft cancel: keeps the card and the history of its expenses)
+exports.cancelCard = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const card = await prisma.card.findUnique({
+      where: { id: parseInt(id) },
+      include: { account: true },
+    });
+
+    if (!card) {
+      return res.status(404).json({
+        success: false,
+        error: 'NOT_FOUND',
+        message: 'Tarjeta no encontrada',
+      });
+    }
+
+    if (card.account.userId !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'No tienes permiso para cancelar esta tarjeta',
+      });
+    }
+
+    if (!card.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'ALREADY_CANCELLED',
+        message: 'La tarjeta ya está cancelada',
+      });
+    }
+
+    const cancelledCard = await prisma.card.update({
+      where: { id: parseInt(id) },
+      data: { isActive: false, cancelledAt: new Date() },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: cancelledCard,
+      message: ERROR_MESSAGES.CARD_CANCEL_SUCCESS,
     });
   } catch (error) {
     next(error);

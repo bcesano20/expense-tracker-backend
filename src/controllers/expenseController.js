@@ -82,6 +82,14 @@ exports.createExpense = async (req, res, next) => {
         });
       }
 
+      if (!card.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: 'CARD_CANCELLED',
+          message: ERROR_MESSAGES.CARD_CANCELLED,
+        });
+      }
+
       // Just the credit cards can have totalInstallments
       if (card.type === 'credit') {
         // Calculate the billing Month
@@ -497,6 +505,14 @@ exports.updateExpense = async (req, res, next) => {
             success: false,
             error: 'CARD_NOT_FOUND',
             message: ERROR_MESSAGES.CARD_NOT_FOUND,
+          });
+        }
+
+        if (!newCard.isActive) {
+          return res.status(400).json({
+            success: false,
+            error: 'CARD_CANCELLED',
+            message: ERROR_MESSAGES.CARD_CANCELLED,
           });
         }
 
