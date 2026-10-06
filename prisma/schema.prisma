@@ -46,6 +46,8 @@ model Card {
   network       String    // "visa", "mastercard", "amex", "discover"
   closeDay      Int?      // day of the month (e.g. 25) — credit cards only
   balance       Float?    // available funds — debit cards only
+  isActive      Boolean   @default(true)  // false once the card is cancelled (history is kept)
+  cancelledAt   DateTime?                 // when the card was cancelled
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
