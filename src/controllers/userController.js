@@ -1,7 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
-const prisma = new PrismaClient();
+const prisma = require('../helpers/prisma');
 
 // GET THE USER BY THE ID
 exports.getUserById = async (req, res, next) => {

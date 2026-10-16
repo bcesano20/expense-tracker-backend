@@ -1,8 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
-
 const { ERROR_MESSAGES } = require('../helpers/constants');
 
-const prisma = new PrismaClient();
+const prisma = require('../helpers/prisma');
 
 // ============================================
 // CREATE BUDGET
