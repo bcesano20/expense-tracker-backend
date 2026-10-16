@@ -1,6 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+const prisma = require('../helpers/prisma');
 
 // CREATE CATEGORY
 exports.createCategory = async (req, res, next) => {

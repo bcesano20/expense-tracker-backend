@@ -1,10 +1,9 @@
-const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const { ERROR_MESSAGES } = require('../helpers/constants');
 
-const prisma = new PrismaClient();
+const prisma = require('../helpers/prisma');
 
 // REGISTER
 exports.register = async (req, res, next) => {

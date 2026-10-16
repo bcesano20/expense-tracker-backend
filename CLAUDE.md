@@ -382,18 +382,4 @@ const JWT_SECRET = process.env.JWT_SECRET; // ✅
 
 ---
 
-## Quick References
-
-- **Prisma Docs:** https://www.prisma.io/docs/
-- **Express Docs:** https://expressjs.com/
-- **JWT:** https://jwt.io/
-- **bcryptjs:** https://github.com/dcodeIO/bcrypt.js
-
----
-
-## Common Next Steps
-
-1. **Add a new route:** Create `routes/new.js`, add controller, register in `server.js`
-2. **Change DB schema:** Edit `prisma/schema.prisma` → `npm run prisma:migrate`
-3. **Deploy to production:** Railway requires `DATABASE_URL` in env vars
-4. **Debug a query:** Use `npx prisma studio` to view data in real time
+@../.claude/node-express-teaching.md

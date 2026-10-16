@@ -1,9 +1,7 @@
-const { PrismaClient } = require('@prisma/client');
-
-const { calculateBillingMonth } = require('../utils/billingCalculator');
 const { ERROR_MESSAGES } = require('../helpers/constants');
+const { calculateBillingMonth } = require('../utils/billingCalculator');
 
-const prisma = new PrismaClient();
+const prisma = require('../helpers/prisma');
 
 // ============================================
 // CREATE EXPENSE
@@ -66,6 +64,7 @@ exports.createExpense = async (req, res, next) => {
 
     let cardData = null;
     let totalInstallmentsToCreate = [];
+    let shouldDecrementBalance = false;
 
     // If the expense is with card
     if (paymentMethod === 'card' && cardId) {
@@ -159,15 +158,8 @@ exports.createExpense = async (req, res, next) => {
         expenseData.billingYear = billingYear;
         expenseData.paymentMethod = 'card';
 
-        // Reduce from the salary
-        await prisma.card.update({
-          where: { id: parseInt(cardId) },
-          data: {
-            balance: {
-              decrement: parseFloat(amount),
-            },
-          },
-        });
+        // Balance is reduced inside the transaction below
+        shouldDecrementBalance = true;
 
         cardData = {
           cardId: parseInt(cardId),
@@ -194,42 +186,57 @@ exports.createExpense = async (req, res, next) => {
       expenseData.billingYear = billingYear;
     }
 
-    // 4. CREATE EXPENSE
-    const expense = await prisma.expense.create({
-      data: expenseData,
-    });
+    // 4. WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
+    const detailedExpense = await prisma.$transaction(async (tx) => {
+      // Debit card: reduce the balance
+      if (shouldDecrementBalance) {
+        await tx.card.update({
+          where: { id: parseInt(cardId) },
+          data: {
+            balance: {
+              decrement: parseFloat(amount),
+            },
+          },
+        });
+      }
 
-    // 5. CREATE RELATION WITH CARD ( IF APPLY )
-    if (cardData) {
-      await prisma.expenseCard.create({
-        data: {
-          expenseId: expense.id,
-          ...cardData,
+      const expense = await tx.expense.create({
+        data: expenseData,
+      });
+
+      // Relation with card ( if apply )
+      if (cardData) {
+        await tx.expenseCard.create({
+          data: {
+            expenseId: expense.id,
+            ...cardData,
+          },
+        });
+      }
+
+      // Installments ( if apply )
+      if (totalInstallmentsToCreate.length > 0) {
+        await tx.installment.createMany({
+          data: totalInstallmentsToCreate.map((inst) => ({
+            ...inst,
+            expenseId: expense.id,
+          })),
+        });
+      }
+
+      return tx.expense.findUnique({
+        where: { id: expense.id },
+        include: {
+          category: true,
+          card: {
+            include: { card: true },
+          },
+          installments: true,
         },
       });
-    }
-
-    // 6. CREATE INSTALLMENT ( IF APPLY )
-    if (totalInstallmentsToCreate.length > 0) {
-      await prisma.installment.createMany({
-        data: totalInstallmentsToCreate.map((inst) => ({
-          ...inst,
-          expenseId: expense.id,
-        })),
-      });
-    }
-
-    // 7. RESPONSE
-    const detailedExpense = await prisma.expense.findUnique({
-      where: { id: expense.id },
-      include: {
-        category: true,
-        card: {
-          include: { card: true },
-        },
-        installments: true,
-      },
     });
+
+    // 5. RESPONSE
 
     res.status(201).json({
       success: true,
@@ -413,6 +420,9 @@ exports.updateExpense = async (req, res, next) => {
     }
 
     const updateData = {};
+    // Card-related writes, executed inside the transaction before the expense update
+    const cardWrites = [];
+
     if (description) updateData.description = description.trim();
     if (amount) {
       if (amount <= 0) {
@@ -432,6 +442,7 @@ exports.updateExpense = async (req, res, next) => {
     if (paymentMethod && paymentMethod !== expense.paymentMethod) {
       const oldMethod = expense.paymentMethod;
       const newMethod = paymentMethod;
+
       const NON_CARD_METHODS = ['cash', 'transfer', 'other'];
 
       // Block changes involving credit card installments
@@ -477,13 +488,15 @@ exports.updateExpense = async (req, res, next) => {
           });
         }
 
-        await prisma.card.update({
-          where: { id: existingCard.id },
-          data: { balance: { increment: expense.amount } },
-        });
+        cardWrites.push(async (tx) => {
+          await tx.card.update({
+            where: { id: existingCard.id },
+            data: { balance: { increment: expense.amount } },
+          });
 
-        await prisma.installment.deleteMany({ where: { expenseId: expense.id } });
-        await prisma.expenseCard.delete({ where: { expenseId: expense.id } });
+          await tx.installment.deleteMany({ where: { expenseId: expense.id } });
+          await tx.expenseCard.delete({ where: { expenseId: expense.id } });
+        });
 
         updateData.paymentMethod = newMethod;
       } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === 'card') {
@@ -530,25 +543,27 @@ exports.updateExpense = async (req, res, next) => {
         const billingYear = expenseDate.getFullYear();
         const finalAmount = updateData.amount ?? expense.amount;
 
-        await prisma.card.update({
-          where: { id: newCard.id },
-          data: { balance: { decrement: finalAmount } },
-        });
+        cardWrites.push(async (tx) => {
+          await tx.card.update({
+            where: { id: newCard.id },
+            data: { balance: { decrement: finalAmount } },
+          });
 
-        await prisma.expenseCard.create({
-          data: { expenseId: expense.id, cardId: newCard.id },
-        });
+          await tx.expenseCard.create({
+            data: { expenseId: expense.id, cardId: newCard.id },
+          });
 
-        await prisma.installment.create({
-          data: {
-            expenseId: expense.id,
-            cardId: newCard.id,
-            installmentNumber: 1,
-            totalInstallments: 1,
-            installmentAmount: finalAmount,
-            paymentMonth: billingMonth,
-            paymentYear: billingYear,
-          },
+          await tx.installment.create({
+            data: {
+              expenseId: expense.id,
+              cardId: newCard.id,
+              installmentNumber: 1,
+              totalInstallments: 1,
+              installmentAmount: finalAmount,
+              paymentMonth: billingMonth,
+              paymentYear: billingYear,
+            },
+          });
         });
 
         updateData.paymentMethod = 'card';
@@ -560,16 +575,23 @@ exports.updateExpense = async (req, res, next) => {
       }
     }
 
-    const updatedExpense = await prisma.expense.update({
-      where: { id: parseInt(id) },
-      data: updateData,
-      include: {
-        category: true,
-        card: {
-          include: { card: true },
+    // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
+    const updatedExpense = await prisma.$transaction(async (tx) => {
+      for (const write of cardWrites) {
+        await write(tx);
+      }
+
+      return tx.expense.update({
+        where: { id: parseInt(id) },
+        data: updateData,
+        include: {
+          category: true,
+          card: {
+            include: { card: true },
+          },
+          installments: true,
         },
-        installments: true,
-      },
+      });
     });
 
     res.status(200).json({
@@ -583,7 +605,7 @@ exports.updateExpense = async (req, res, next) => {
 };
 
 // ============================================
-// DELETE EXPENSE GASTO
+// DELETE EXPENSE
 // ============================================
 exports.deleteExpense = async (req, res, next) => {
   try {
@@ -615,15 +637,23 @@ exports.deleteExpense = async (req, res, next) => {
       });
     }
 
-    // If was an expense with debit card, restore the salary
+    // If was an expense with debit card, the salary must be restored
+    let debitCardToRestore = null;
     if (expense.card && expense.paymentMethod === 'card') {
       const cardRecord = await prisma.card.findUnique({
         where: { id: expense.card.cardId },
       });
 
       if (cardRecord && cardRecord.type === 'debit') {
-        await prisma.card.update({
-          where: { id: cardRecord.id },
+        debitCardToRestore = cardRecord;
+      }
+    }
+
+    // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
+    await prisma.$transaction(async (tx) => {
+      if (debitCardToRestore) {
+        await tx.card.update({
+          where: { id: debitCardToRestore.id },
           data: {
             balance: {
               increment: expense.amount,
@@ -631,11 +661,11 @@ exports.deleteExpense = async (req, res, next) => {
           },
         });
       }
-    }
 
-    // The totalInstallments are deleted on cascade
-    await prisma.expense.delete({
-      where: { id: parseInt(id) },
+      // The totalInstallments are deleted on cascade
+      await tx.expense.delete({
+        where: { id: parseInt(id) },
+      });
     });
 
     res.status(200).json({
