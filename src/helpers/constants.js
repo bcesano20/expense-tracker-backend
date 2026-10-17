@@ -33,6 +33,7 @@ const ERROR_MESSAGES = {
   CREDIT_CARD_NOT_UPDATAED: 'No se puede cambiar a tarjeta de crédito desde otro método de pago',
   CARD_CANCELLED: 'La tarjeta está cancelada y no se pueden registrar nuevos gastos con ella',
   CARD_CANCEL_SUCCESS: 'Tarjeta cancelada correctamente',
+  TOO_MANY_ATTEMPTS: 'Demasiados intentos. Intenta nuevamente en 15 minutos',
 };
 
 module.exports = { ERROR_MESSAGES };
