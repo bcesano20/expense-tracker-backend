@@ -78,7 +78,7 @@ A green check on a commit means all three passed.
 expense-tracker-backend/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                # GitHub Actions CI pipeline
+│       └── lint.yml                # GitHub Actions CI pipeline
 ├── prisma/
 │   ├── schema.prisma             # Database schema
 │   └── migrations/               # Migration history

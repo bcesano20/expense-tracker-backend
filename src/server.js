@@ -4,6 +4,9 @@ require('dotenv').config();
 
 const app = express();
 
+// Railway sits behind one reverse proxy; trust it so req.ip is the real client IP
+app.set('trust proxy', 1);
+
 // Route imports
 const authRoutes = require('./routes/auth');
 const usersRoutes = require('./routes/user');
@@ -16,7 +19,7 @@ const incomesRoutes = require('./routes/income');
 const budgetsRoutes = require('./routes/budget');
 
 // Middlewares
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL }));
 app.use(express.json());
 
 // Routes to use and activate
@@ -35,6 +38,8 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend funcionando ✅' });
 });
 
+// Express identifies error handlers by their 4 parameters, so `next` must stay even if unused
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(500).json({
