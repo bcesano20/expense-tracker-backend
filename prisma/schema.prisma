@@ -45,7 +45,7 @@ model Card {
   type          String    // "credit" or "debit"
   network       String    // "visa", "mastercard", "amex", "discover"
   closeDay      Int?      // day of the month (e.g. 25) — credit cards only
-  balance       Float?    // available funds — debit cards only
+  balance       Decimal?   @db.Decimal(12, 2)   // available funds — debit cards only
   isActive      Boolean   @default(true)  // false once the card is cancelled (history is kept)
   cancelledAt   DateTime?                 // when the card was cancelled
   createdAt     DateTime  @default(now())
@@ -60,7 +60,7 @@ model Expense {
   account         Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   accountId       Int
   description     String
-  amount          Float
+  amount          Decimal  @db.Decimal(12, 2) 
   date            DateTime
   category        Category  @relation(fields: [categoryId], references: [id])
   categoryId      Int
@@ -104,7 +104,7 @@ model Installment {
   cardId              Int
   installmentNumber   Int       // installment number (1, 2, 3...)
   totalInstallments   Int       // total number of installments
-  installmentAmount   Float
+  installmentAmount   Decimal  @db.Decimal(12, 2) 
   paymentMonth        Int       // month when this installment is due
   paymentYear         Int       // year when this installment is due
   createdAt           DateTime  @default(now())
@@ -116,7 +116,7 @@ model Income {
   account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   accountId Int
   description String
-  amount      Float
+  amount      Decimal  @db.Decimal(12, 2) 
   source      String    // "salary", "sales", "investment", "other"
   date        DateTime
   createdAt   DateTime  @default(now())
@@ -136,9 +136,9 @@ model Budget {
   
   month      Int      // 1-12
   year       Int
-  amount     Float?   // For a fix budget value
-  minAmount  Float?   // minimum value for a budget range
-  maxAmount  Float?   // maximum value for a budget range
+  amount     Decimal?   @db.Decimal(12, 2) // For a fix budget value
+  minAmount  Decimal?   @db.Decimal(12, 2) // minimum value for a budget range
+  maxAmount  Decimal?   @db.Decimal(12, 2) // maximum value for a budget range
   
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

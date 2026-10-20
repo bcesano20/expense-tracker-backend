@@ -2,6 +2,7 @@ const { ERROR_MESSAGES } = require('../helpers/constants');
 const { calculateBillingMonth } = require('../utils/billingCalculator');
 
 const prisma = require('../helpers/prisma');
+const { splitAmount } = require('../utils/money');
 
 // ============================================
 // CREATE EXPENSE
@@ -110,7 +111,8 @@ exports.createExpense = async (req, res, next) => {
 
         // Payment starts the month AFTER the billing/statement month
         if (totalInstallments && totalInstallments > 1) {
-          const installmentAmount = parseFloat(amount) / totalInstallments;
+          // Rounded to 2 decimals; the last installment absorbs the leftover cents
+          const installmentAmounts = splitAmount(amount, totalInstallments);
 
           for (let i = 1; i <= totalInstallments; i++) {
             let paymentMonth = billingMonth + i; // +i so first payment is billingMonth+1
@@ -124,7 +126,7 @@ exports.createExpense = async (req, res, next) => {
             totalInstallmentsToCreate.push({
               installmentNumber: i,
               totalInstallments: totalInstallments,
-              installmentAmount,
+              installmentAmount: installmentAmounts[i - 1],
               paymentMonth,
               paymentYear,
               cardId: parseInt(cardId),

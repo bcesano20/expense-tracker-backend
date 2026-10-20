@@ -1,6 +1,7 @@
 const { ERROR_MESSAGES } = require('../helpers/constants');
 
 const prisma = require('../helpers/prisma');
+const { ZERO, sumField } = require('../utils/money');
 
 // ============================================
 // FULL MONTHLY REPORT
@@ -61,16 +62,18 @@ exports.getMonthlyReport = async (req, res, next) => {
     });
 
     // 2. CALCULATE GRAND TOTAL
-    const totalSpent = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const totalSpent = sumField(expenses, 'amount').toNumber();
 
     // 3. GROUP BY CATEGORY
     const expensesByCategory = {};
     expenses.forEach((exp) => {
       const categoryName = exp.category?.name ?? 'Sin categoría';
       if (!expensesByCategory[categoryName]) {
-        expensesByCategory[categoryName] = { total: 0, color: exp.category?.color ?? null };
+        expensesByCategory[categoryName] = { total: ZERO, color: exp.category?.color ?? null };
       }
-      expensesByCategory[categoryName].total += exp.amount;
+      expensesByCategory[categoryName].total = expensesByCategory[categoryName].total.plus(
+        exp.amount
+      );
     });
 
     // 4. GROUP BY PAYMENT METHOD
@@ -78,9 +81,11 @@ exports.getMonthlyReport = async (req, res, next) => {
     expenses.forEach((exp) => {
       const method = exp.paymentMethod;
       if (!expensesByPaymentMethod[method]) {
-        expensesByPaymentMethod[method] = { total: 0, count: 0 };
+        expensesByPaymentMethod[method] = { total: ZERO, count: 0 };
       }
-      expensesByPaymentMethod[method].total += exp.amount;
+      expensesByPaymentMethod[method].total = expensesByPaymentMethod[method].total.plus(
+        exp.amount
+      );
       expensesByPaymentMethod[method].count += 1;
     });
 
@@ -109,11 +114,13 @@ exports.getMonthlyReport = async (req, res, next) => {
           cardName: installment.card.name,
           cardBank: installment.card.bank,
           cardType: installment.card.type,
-          totalDue: 0,
+          totalDue: ZERO,
           installments: [],
         };
       }
-      installmentsByCard[cardId].totalDue += installment.installmentAmount;
+      installmentsByCard[cardId].totalDue = installmentsByCard[cardId].totalDue.plus(
+        installment.installmentAmount
+      );
       installmentsByCard[cardId].installments.push({
         id: installment.id,
         expenseDescription: installment.expense.description,
@@ -125,7 +132,7 @@ exports.getMonthlyReport = async (req, res, next) => {
 
     // 7. TOTAL CARD PAYMENTS BY CARD TYPE (credit vs debit)
     const totalCardPaymentsByType = Object.values(installmentsByCard).reduce((acc, card) => {
-      acc[card.cardType] = (acc[card.cardType] ?? 0) + card.totalDue;
+      acc[card.cardType] = (acc[card.cardType] ?? ZERO).plus(card.totalDue);
       return acc;
     }, {});
 
@@ -147,12 +154,12 @@ exports.getMonthlyReport = async (req, res, next) => {
         expensesByCategory: Object.entries(expensesByCategory).map(([category, data]) => ({
           category,
           color: data.color,
-          total: parseFloat(data.total.toFixed(2)),
-          percentage: parseFloat(((data.total / totalSpent) * 100).toFixed(2)),
+          total: data.total.toNumber(),
+          percentage: (data.total.toNumber() / totalSpent) * 100,
         })),
         expensesByPaymentMethod: Object.entries(expensesByPaymentMethod).map(([method, data]) => ({
           method,
-          total: parseFloat(data.total.toFixed(2)),
+          total: data.total.toNumber(),
           count: data.count,
         })),
         expenseDetails: expenses.map((exp) => ({
@@ -167,13 +174,10 @@ exports.getMonthlyReport = async (req, res, next) => {
           card: exp.card ? exp.card.card.name : null,
         })),
         cardsToPay: Object.values(installmentsByCard),
-        totalCardPayments: Object.values(installmentsByCard).reduce(
-          (sum, card) => sum + card.totalDue,
-          0
-        ),
+        totalCardPayments: sumField(Object.values(installmentsByCard), 'totalDue').toNumber(),
         totalCardPaymentsByType: Object.entries(totalCardPaymentsByType).reduce(
           (acc, [type, total]) => {
-            acc[type] = parseFloat(total.toFixed(2));
+            acc[type] = total.toNumber();
             return acc;
           },
           {}
@@ -228,7 +232,7 @@ exports.getQuickSummary = async (req, res, next) => {
       },
     });
 
-    const currentMonthTotal = currentMonthExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const currentMonthTotal = sumField(currentMonthExpenses, 'amount').toNumber();
 
     // Installments due this month
     const currentMonthInstallments = await prisma.installment.findMany({
@@ -241,10 +245,10 @@ exports.getQuickSummary = async (req, res, next) => {
       },
     });
 
-    const currentMonthInstallmentsTotal = currentMonthInstallments.reduce(
-      (sum, installment) => sum + installment.installmentAmount,
-      0
-    );
+    const currentMonthInstallmentsTotal = sumField(
+      currentMonthInstallments,
+      'installmentAmount'
+    ).toNumber();
 
     // Daily average
     const daysElapsed = now.getDate();
@@ -258,12 +262,12 @@ exports.getQuickSummary = async (req, res, next) => {
       data: {
         month: currentMonth,
         year: currentYear,
-        currentMonthExpensesTotal: parseFloat(currentMonthTotal.toFixed(2)),
+        currentMonthExpensesTotal: currentMonthTotal,
         currentMonthExpenseCount: currentMonthExpenses.length,
-        currentMonthInstallmentsTotal: parseFloat(currentMonthInstallmentsTotal.toFixed(2)),
+        currentMonthInstallmentsTotal: currentMonthInstallmentsTotal,
         currentMonthInstallmentCount: currentMonthInstallments.length,
-        dailyAverageExpense: parseFloat(dailyAverage.toFixed(2)),
-        monthlyProjection: parseFloat(monthlyProjection.toFixed(2)),
+        dailyAverageExpense: dailyAverage,
+        monthlyProjection: monthlyProjection,
       },
       message: 'Resumen rápido del mes actual',
     });
@@ -323,27 +327,25 @@ exports.getCategoryAnalysis = async (req, res, next) => {
           category: categoryKey,
           color: exp.category?.color ?? null,
           months: {},
-          periodTotal: 0,
+          periodTotal: ZERO,
         };
       }
 
       const monthKey = `${exp.billingMonth}/${exp.billingYear}`;
-      if (!categories[categoryKey].months[monthKey]) {
-        categories[categoryKey].months[monthKey] = 0;
-      }
-
-      categories[categoryKey].months[monthKey] += exp.amount;
-      categories[categoryKey].periodTotal += exp.amount;
+      const group = categories[categoryKey];
+      group.months[monthKey] = (group.months[monthKey] ?? ZERO).plus(exp.amount);
+      group.periodTotal = group.periodTotal.plus(exp.amount);
     });
 
     // Sort by total descending and format response
     const analysis = Object.values(categories)
-      .sort((a, b) => b.periodTotal - a.periodTotal)
+      .sort((a, b) => b.periodTotal.comparedTo(a.periodTotal))
       .map((cat) => ({
         ...cat,
-        monthlyAverage: parseFloat((cat.periodTotal / monthCount).toFixed(2)),
+        periodTotal: cat.periodTotal.toNumber(),
+        monthlyAverage: cat.periodTotal.toNumber() / monthCount,
         months: Object.entries(cat.months).reduce((acc, [month, total]) => {
-          acc[month] = parseFloat(total.toFixed(2));
+          acc[month] = total.toNumber();
           return acc;
         }, {}),
       }));
@@ -352,7 +354,7 @@ exports.getCategoryAnalysis = async (req, res, next) => {
       success: true,
       data: {
         period: `Last ${monthCount} months`,
-        totalSpent: parseFloat(analysis.reduce((sum, cat) => sum + cat.periodTotal, 0).toFixed(2)),
+        totalSpent: sumField(analysis, 'periodTotal').toNumber(),
         categories: analysis,
       },
       message: 'Análisis por categoría generado',
@@ -412,10 +414,7 @@ exports.getCardDetails = async (req, res, next) => {
           },
         });
 
-        const totalDue = installments.reduce(
-          (sum, installment) => sum + installment.installmentAmount,
-          0
-        );
+        const totalDue = sumField(installments, 'installmentAmount').toNumber();
 
         return {
           cardId: card.id,
@@ -424,13 +423,13 @@ exports.getCardDetails = async (req, res, next) => {
           type: card.type,
           network: card.network,
           currentBalance: card.balance,
-          totalDue: parseFloat(totalDue.toFixed(2)),
+          totalDue: totalDue,
           installmentCount: installments.length,
           installmentDetails: installments.map((installment) => ({
             id: installment.id,
             expenseDescription: installment.expense.description,
             installmentProgress: `${installment.installmentNumber}/${installment.totalInstallments}`,
-            amount: parseFloat(installment.installmentAmount.toFixed(2)),
+            amount: installment.installmentAmount,
           })),
         };
       })
@@ -439,13 +438,13 @@ exports.getCardDetails = async (req, res, next) => {
     // Filter cards with installments due
     const cardsWithInstallments = cardDetails.filter((card) => card.installmentCount > 0);
 
-    const grandTotal = cardsWithInstallments.reduce((sum, card) => sum + card.totalDue, 0);
+    const grandTotal = sumField(cardsWithInstallments, 'totalDue').toNumber();
 
     res.status(200).json({
       success: true,
       data: {
         period: `${monthNum}/${yearNum}`,
-        totalDue: parseFloat(grandTotal.toFixed(2)),
+        totalDue: grandTotal,
         cards: cardsWithInstallments,
         cardsWithInstallmentsCount: cardsWithInstallments.length,
       },
@@ -520,7 +519,7 @@ exports.getCategoryBudgetStatus = async (req, res, next) => {
       }),
     ]);
 
-    const totalSpent = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const totalSpent = sumField(expenses, 'amount').toNumber();
 
     let status;
     let budgetSummary;
@@ -530,28 +529,28 @@ exports.getCategoryBudgetStatus = async (req, res, next) => {
       budgetSummary = null;
     } else if (budget.amount !== null) {
       // Fixed budget
-      status = totalSpent > budget.amount ? 'OVER_BUDGET' : 'UNDER_BUDGET';
+      status = budget.amount.lt(totalSpent) ? 'OVER_BUDGET' : 'UNDER_BUDGET';
       budgetSummary = {
         type: 'fixed',
-        budgetAmount: budget.amount,
-        remaining: parseFloat((budget.amount - totalSpent).toFixed(2)),
-        usagePercentage: parseFloat(((totalSpent / budget.amount) * 100).toFixed(2)),
+        budgetAmount: budget.amount.toNumber(),
+        remaining: budget.amount.minus(totalSpent).toNumber(),
+        usagePercentage: (totalSpent / budget.amount.toNumber()) * 100,
       };
     } else {
       // Range budget
-      if (totalSpent > budget.maxAmount) {
+      if (budget.maxAmount.lt(totalSpent)) {
         status = 'OVER_BUDGET';
-      } else if (totalSpent < budget.minAmount) {
+      } else if (budget.minAmount.gt(totalSpent)) {
         status = 'UNDER_BUDGET';
       } else {
         status = 'WITHIN_RANGE';
       }
       budgetSummary = {
         type: 'range',
-        minAmount: budget.minAmount,
-        maxAmount: budget.maxAmount,
-        remainingToMax: parseFloat((budget.maxAmount - totalSpent).toFixed(2)),
-        usagePercentage: parseFloat(((totalSpent / budget.maxAmount) * 100).toFixed(2)),
+        minAmount: budget.minAmount.toNumber(),
+        maxAmount: budget.maxAmount.toNumber(),
+        remainingToMax: budget.maxAmount.minus(totalSpent).toNumber(),
+        usagePercentage: (totalSpent / budget.maxAmount.toNumber()) * 100,
       };
     }
 
@@ -560,7 +559,7 @@ exports.getCategoryBudgetStatus = async (req, res, next) => {
       data: {
         period: { month: monthNum, year: yearNum },
         category: budget?.category ?? expenses[0]?.category ?? null,
-        totalSpent: parseFloat(totalSpent.toFixed(2)),
+        totalSpent: totalSpent,
         expenseCount: expenses.length,
         budget: budgetSummary,
         status,
@@ -632,11 +631,12 @@ exports.getIncomeVsExpenses = async (req, res, next) => {
       }),
     ]);
 
-    const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
-    const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-    const balance = totalIncome - totalExpenses;
-    const expensePercentage =
-      totalIncome === 0 ? null : parseFloat(((totalExpenses / totalIncome) * 100).toFixed(2));
+    const incomeDecimal = sumField(incomes, 'amount');
+    const expensesDecimal = sumField(expenses, 'amount');
+    const totalIncome = incomeDecimal.toNumber();
+    const totalExpenses = expensesDecimal.toNumber();
+    const balance = incomeDecimal.minus(expensesDecimal).toNumber();
+    const expensePercentage = totalIncome === 0 ? null : (totalExpenses / totalIncome) * 100;
 
     let status;
     if (totalIncome === 0) {
@@ -653,9 +653,9 @@ exports.getIncomeVsExpenses = async (req, res, next) => {
       success: true,
       data: {
         period: { month: monthNum, year: yearNum },
-        totalIncome: parseFloat(totalIncome.toFixed(2)),
-        totalExpenses: parseFloat(totalExpenses.toFixed(2)),
-        balance: parseFloat(balance.toFixed(2)),
+        totalIncome: totalIncome,
+        totalExpenses: totalExpenses,
+        balance: balance,
         expensePercentage,
         incomeCount: incomes.length,
         expenseCount: expenses.length,
@@ -719,7 +719,8 @@ exports.getMonthComparison = async (req, res, next) => {
       },
     });
 
-    const currentTotal = currentMonthExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const currentDecimal = sumField(currentMonthExpenses, 'amount');
+    const currentTotal = currentDecimal.toNumber();
 
     // Previous month expenses
     const previousMonthExpenses = await prisma.expense.findMany({
@@ -730,10 +731,11 @@ exports.getMonthComparison = async (req, res, next) => {
       },
     });
 
-    const previousTotal = previousMonthExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+    const previousDecimal = sumField(previousMonthExpenses, 'amount');
+    const previousTotal = previousDecimal.toNumber();
 
     // Calculate difference
-    const difference = currentTotal - previousTotal;
+    const difference = currentDecimal.minus(previousDecimal).toNumber();
     const changePercentage = previousTotal === 0 ? 0 : (difference / previousTotal) * 100;
 
     res.status(200).json({
@@ -742,18 +744,18 @@ exports.getMonthComparison = async (req, res, next) => {
         currentMonth: {
           month: currentMonth,
           year: currentYear,
-          total: parseFloat(currentTotal.toFixed(2)),
+          total: currentTotal,
           count: currentMonthExpenses.length,
         },
         previousMonth: {
           month: previousMonth,
           year: previousYear,
-          total: parseFloat(previousTotal.toFixed(2)),
+          total: previousTotal,
           count: previousMonthExpenses.length,
         },
         comparison: {
-          difference: parseFloat(difference.toFixed(2)),
-          changePercentage: parseFloat(changePercentage.toFixed(2)),
+          difference: difference,
+          changePercentage: changePercentage,
           trend: difference > 0 ? 'INCREASE' : difference < 0 ? 'DECREASE' : 'EQUAL',
         },
       },
