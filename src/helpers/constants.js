@@ -10,6 +10,8 @@ const ERROR_MESSAGES = {
   CATEGORY_NOT_FOUND: 'Categoria no encontrada',
   INCOME_CREATION: 'La cuenta, descripción, monto, fuente y fecha son requeridos',
   AMOUNT_MORE_0: 'El monto debe ser mayor a 0',
+  INVALID_AMOUNT_OR_ZERO:
+    'El monto debe ser un número mayor o igual a 0, con hasta 2 decimales y un máximo de 9999999999.99',
   INVALID_AMOUNT:
     'El monto debe ser un número mayor a 0, con hasta 2 decimales y un máximo de 9999999999.99',
   INCOME_ACCOUNT_PERMISSION: 'No tienes permiso para operar sobre ingresos en esta cuenta',
