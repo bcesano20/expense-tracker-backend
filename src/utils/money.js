@@ -23,8 +23,9 @@ const splitAmount = (amount, parts) => {
 };
 
 // Returns the amount as an exact Prisma.Decimal, or null when it is not a number greater than 0
-// with at most 2 decimals that fits Decimal(12, 2). It never goes through a float.
-const parseAmount = (value) => {
+// (or greater than or equal to 0 with `allowZero`) with at most 2 decimals that fits
+// Decimal(12, 2). It never goes through a float.
+const parseAmount = (value, { allowZero = false } = {}) => {
   let amount;
   try {
     amount = new Prisma.Decimal(value);
@@ -32,8 +33,9 @@ const parseAmount = (value) => {
     return null;
   }
 
+  const isPositive = allowZero ? amount.gte(0) : amount.gt(0);
   const isValid =
-    amount.isFinite() && amount.gt(0) && amount.decimalPlaces() <= 2 && amount.lte(MAX_AMOUNT);
+    amount.isFinite() && isPositive && amount.decimalPlaces() <= 2 && amount.lte(MAX_AMOUNT);
   return isValid ? amount : null;
 };
 
