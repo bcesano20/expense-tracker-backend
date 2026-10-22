@@ -1,6 +1,9 @@
-const { ERROR_MESSAGES } = require('../helpers/constants');
-
 const prisma = require('../helpers/prisma');
+const { ERROR_MESSAGES } = require('../helpers/constants');
+const { parseAmount } = require('../utils/money');
+
+// True when the client sent a value for the field (an explicit null counts as not sent)
+const isProvided = (value) => value !== undefined && value !== null;
 
 // ============================================
 // CREATE BUDGET
@@ -47,13 +50,26 @@ exports.createBudget = async (req, res, next) => {
       });
     }
 
+    let parsedAmount = null;
+    let parsedMin = null;
+    let parsedMax = null;
+
+    // Check the value passed fot the fixed budget cases
+    if (isFixed) {
+      parsedAmount = parseAmount(amount);
+
+      if (!parsedAmount) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT,
+        });
+      }
+    }
+
+    // Check the value passed fot the range budget cases
     if (isRange) {
-      if (
-        minAmount === undefined ||
-        minAmount === null ||
-        maxAmount === undefined ||
-        maxAmount === null
-      ) {
+      if (!isProvided(minAmount) || !isProvided(maxAmount)) {
         return res.status(400).json({
           success: false,
           error: 'VALIDATION_ERROR',
@@ -61,7 +77,22 @@ exports.createBudget = async (req, res, next) => {
         });
       }
 
-      if (minAmount >= maxAmount) {
+      // The minimum of a range may be 0 ("spend up to X"); the maximum may not
+      parsedMin = parseAmount(minAmount, { allowZero: true });
+      parsedMax = parseAmount(maxAmount);
+
+      if (!parsedMin || !parsedMax) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: parsedMin
+            ? ERROR_MESSAGES.INVALID_AMOUNT
+            : ERROR_MESSAGES.INVALID_AMOUNT_OR_ZERO,
+        });
+      }
+
+      // Decimal must be compared with its methods: `>=` would compare the values as strings
+      if (parsedMin.gte(parsedMax)) {
         return res.status(400).json({
           success: false,
           error: 'VALIDATION_ERROR',
@@ -102,9 +133,9 @@ exports.createBudget = async (req, res, next) => {
         categoryId: parseInt(categoryId),
         month: parseInt(month),
         year: parseInt(year),
-        amount: isFixed ? parseFloat(amount) : null,
-        minAmount: isRange ? parseFloat(minAmount) : null,
-        maxAmount: isRange ? parseFloat(maxAmount) : null,
+        amount: parsedAmount,
+        minAmount: parsedMin,
+        maxAmount: parsedMax,
       },
       include: { category: true },
     });
@@ -266,9 +297,45 @@ exports.updateBudget = async (req, res, next) => {
       });
     }
 
+    let parsedAmount = null;
+    let parsedMin = null;
+    let parsedMax = null;
+
+    if (isFixed) {
+      parsedAmount = parseAmount(amount);
+
+      if (!parsedAmount) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT,
+        });
+      }
+    }
+
     if (isRange) {
-      const resolvedMin = minAmount ?? budget.minAmount;
-      const resolvedMax = maxAmount ?? budget.maxAmount;
+      // Only the bounds sent by the client are parsed; the other one keeps the stored value
+      parsedMin = isProvided(minAmount) ? parseAmount(minAmount, { allowZero: true }) : null;
+      parsedMax = isProvided(maxAmount) ? parseAmount(maxAmount) : null;
+
+      if (isProvided(minAmount) && !parsedMin) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT_OR_ZERO,
+        });
+      }
+
+      if (isProvided(maxAmount) && !parsedMax) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT,
+        });
+      }
+
+      const resolvedMin = parsedMin ?? budget.minAmount;
+      const resolvedMax = parsedMax ?? budget.maxAmount;
 
       if (resolvedMin === null || resolvedMax === null) {
         return res.status(400).json({
@@ -278,7 +345,8 @@ exports.updateBudget = async (req, res, next) => {
         });
       }
 
-      if (resolvedMin >= resolvedMax) {
+      // Both can be Decimal; `>=` would compare them as strings (9 >= 10 is true)
+      if (resolvedMin.gte(resolvedMax)) {
         return res.status(400).json({
           success: false,
           error: 'VALIDATION_ERROR',
@@ -290,13 +358,13 @@ exports.updateBudget = async (req, res, next) => {
     const updateData = {};
 
     if (isFixed) {
-      updateData.amount = parseFloat(amount);
+      updateData.amount = parsedAmount;
       updateData.minAmount = null;
       updateData.maxAmount = null;
     } else if (isRange) {
       updateData.amount = null;
-      if (minAmount !== undefined) updateData.minAmount = parseFloat(minAmount);
-      if (maxAmount !== undefined) updateData.maxAmount = parseFloat(maxAmount);
+      if (parsedMin) updateData.minAmount = parsedMin;
+      if (parsedMax) updateData.maxAmount = parsedMax;
     }
 
     const updatedBudget = await prisma.budget.update({

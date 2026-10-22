@@ -77,7 +77,8 @@ src/
 │   ├── prisma.js              # Shared PrismaClient (single connection pool)
 │   └── constants.js           # ERROR_MESSAGES (Spanish user-facing messages)
 └── utils/
-    └── billingCalculator.js   # calculateBillingMonth(expenseDate, cardCloseDay)
+    ├── billingCalculator.js   # calculateBillingMonth(expenseDate, cardCloseDay)
+    └── paymentMethod.js       # CARD_METHODS / NON_CARD_METHODS, normalizePaymentMethod (enum check)
 prisma/
 ├── schema.prisma
 └── migrations/
@@ -134,7 +135,7 @@ exports.createExpense = async (req, res, next) => {
   - `User` → many `Account`, many `Category` (categories are per user)
   - `Account` → many `Card`, `Expense`, `Income`, `Budget`
   - `Card` → many `ExpenseCard`, many `Installment`. Has `type` (`credit` | `debit`), `closeDay` (credit only), `balance` (debit only), `isActive` / `cancelledAt` (soft cancel)
-  - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`
+  - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`. `paymentMethod` is the `PaymentMethod` enum: `CASH`, `TRANSFER`, `DEBIT`, `CREDIT`, `OTHER`.
   - `Budget` → per account + category + month + year (unique together); either a fixed `amount` or a `minAmount`/`maxAmount` range
   - `Income` → belongs to an `Account` (`source`: salary, sales, investment, other)
 - Deleting a `User`, `Account`, `Card` or `Expense` cascades to its children.
@@ -270,12 +271,18 @@ calculateBillingMonth(new Date(date), card.closeDay);
 
 Every expense paid with a card gets `Installment` rows (`totalInstallments` defaults to 1):
 
-- Credit card, `totalInstallments > 1` → one `Installment` per installment, `paymentMonth = billingMonth + i` (the first payment is the month AFTER the billing month; roll the year when the month exceeds 12). The expense's `paymentMethod` becomes `card-installments-<n>`.
+- Credit card, `totalInstallments > 1` → one `Installment` per installment, `paymentMonth = billingMonth + i` (the first payment is the month AFTER the billing month; roll the year when the month exceeds 12). The expense's `paymentMethod` is `CREDIT`; the installment count lives only in `Installment.totalInstallments`.
 - Credit card, single payment → one `Installment` with `paymentMonth = billingMonth + 1`.
 - Debit card → one `Installment` in the billing month itself.
 - `installmentAmount = totalAmount / totalInstallments`
 - Reports show expenses by `billingMonth` and installments by `paymentMonth`, so the monthly report only shows the installment due THAT month.
-- Changing the payment method to or from credit-card installments is not supported on update; the user must delete the expense and create it again (`UNSUPORTED_UPDATE_*` messages).
+- Changing the payment method to or from `CREDIT` is not supported on update; the user must delete the expense and create it again (`UNSUPORTED_UPDATE_*` messages).
+
+### Payment method (`PaymentMethod` enum)
+
+- `DEBIT` and `CREDIT` require a `cardId` whose `type` matches; `CASH`, `TRANSFER` and `OTHER` must not send one. The card type, not the client, decides debit vs credit, and a mismatch is rejected (`PAYMENT_METHOD_CARD_MISMATCH`). Invalid values return `400 INVALID_PAYMENT_METHOD`.
+- Import the enum from `@prisma/client` and the groupings from `src/utils/paymentMethod.js`. Never compare against string literals like `'card'`.
+- The API only accepts the enum values (uppercase). The old lowercase values (`cash`, `card`, `card-installments-<n>`, ...) are rejected with `400 INVALID_PAYMENT_METHOD`.
 
 ### Atomic writes
 
