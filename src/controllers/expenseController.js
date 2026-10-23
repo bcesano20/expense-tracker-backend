@@ -204,7 +204,7 @@ exports.createExpense = async (req, res, next) => {
           cardId: parseInt(cardId),
         };
 
-        // One installment for debit
+        // One installment for debit, born paid: the card balance was already charged
         totalInstallmentsToCreate.push({
           installmentNumber: 1,
           totalInstallments: 1,
@@ -212,6 +212,8 @@ exports.createExpense = async (req, res, next) => {
           paymentMonth: billingMonth,
           paymentYear: billingYear,
           cardId: parseInt(cardId),
+          isPayed: true,
+          paidAt: new Date(),
         });
       }
     } else {
@@ -623,6 +625,8 @@ exports.updateExpense = async (req, res, next) => {
             installmentAmount: newAmount,
             paymentMonth: billingMonth,
             paymentYear: billingYear,
+            isPayed: true, // a debit installment is born paid
+            paidAt: new Date(),
           },
         });
       }

@@ -127,6 +127,9 @@ model Installment {
   installmentAmount   Decimal  @db.Decimal(12, 2) 
   paymentMonth        Int       // month when this installment is due
   paymentYear         Int       // year when this installment is due
+  isPayed             Boolean   @default(false) // debit installments are born paid; credit ones are paid by the user
+  paidAt              DateTime? // when it was paid; null while unpaid and for historical (backfilled) ones
+  walletApplied       Boolean   @default(false) // true only if paying it took money from the wallet
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 }
