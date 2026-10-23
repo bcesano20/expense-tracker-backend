@@ -65,14 +65,16 @@ src/
 │   ├── categoryController.js
 │   ├── expenseController.js
 │   ├── incomeController.js
+│   ├── installmentController.js
 │   ├── reportController.js
 │   ├── userController.js
 │   └── walletController.js
 ├── routes/                    # Endpoint definitions (one file per resource, singular names)
 │   ├── account.js  auth.js  budget.js  card.js  category.js
-│   └── expense.js  income.js  report.js  user.js  wallet.js
+│   └── expense.js  income.js  installment.js  report.js  user.js  wallet.js
 ├── middleware/
 │   ├── authMiddleware.js      # JWT validation, sets req.user
+│   ├── timeZoneMiddleware.js  # reads the X-Timezone header, sets req.timeZone (global)
 │   └── rateLimiter.js         # authLimiter: 10 attempts / 15 min per IP
 ├── helpers/
 │   ├── prisma.js              # Shared PrismaClient (single connection pool); Decimal.toJSON -> number
@@ -82,7 +84,8 @@ src/
 └── utils/
     ├── billingCalculator.js   # calculateBillingMonth(expenseDate, cardCloseDay)
     ├── money.js               # parseAmount, splitAmount, sumField, ZERO (Decimal helpers)
-    └── paymentMethod.js       # CARD_METHODS / NON_CARD_METHODS, normalizePaymentMethod (enum check)
+    ├── paymentMethod.js       # CARD_METHODS / NON_CARD_METHODS, normalizePaymentMethod (enum check)
+    └── timeZone.js            # resolveTimeZone (validates, falls back), getCurrentMonth(timeZone)
 prisma/
 ├── schema.prisma
 └── migrations/
@@ -105,12 +108,15 @@ All routes are mounted under `/api` in `server.js`. Everything except `register`
 | `/api/incomes` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
 | `/api/budgets` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
 | `/api/wallets` | `GET /account/:accountId` (with the calculated total), `POST /account/:accountId` (activate with initial balance), `PUT /account/:accountId` (set the new total value) |
+| `/api/installments` | `GET /due?accountId=` (preview of what would be paid), `POST /pay` with `{ accountId, expectedTotal }` (pay every overdue installment) |
 | `/api/reports` | `GET /monthly`, `/summary`, `/category`, `/cards`, `/comparison`, `/budget-status`, `/income-ratio` |
 | `/api/test` | `GET` health check |
 
 ### Request flow pattern
 
-**Request → CORS → JSON parser → (authLimiter) → authMiddleware → Route → Controller → Prisma → Response**
+**Request → CORS → JSON parser → timeZoneMiddleware → (authLimiter) → authMiddleware → Route → Controller → Prisma → Response**
+
+**Time zone:** the server clock is UTC, so "the current month" depends on the user. The frontend sends the browser's IANA zone in an `X-Timezone` header on every request (`Intl.DateTimeFormat().resolvedOptions().timeZone`) and `timeZoneMiddleware` exposes it as `req.timeZone`. A missing or unknown value falls back to `America/Argentina/Buenos_Aires` (the production users) and never fails the request. Use `getCurrentMonth(req.timeZone)` from `src/utils/timeZone.js`, never `new Date().getMonth()`, for anything that depends on the current month. The one exception is SQL migrations, which have no browser and use Buenos Aires time. CORS needs no extra config: the `cors` package reflects the preflight's requested headers.
 
 ```javascript
 // routes/expense.js
@@ -140,6 +146,7 @@ exports.createExpense = async (req, res, next) => {
   - `User` → many `Account`, many `Category` (categories are per user)
   - `Account` → many `Card`, `Expense`, `Income`, `Budget`; optional one-to-one `Wallet`
   - `Wallet` → `accountId` unique, `balance Decimal(12,2)` (default 0, never negative: DB `CHECK`). See the Wallet section
+  - `Installment` → `isPayed`, `paidAt`, `walletApplied` (see the Installment expenses and Wallet sections)
   - `Card` → many `ExpenseCard`, many `Installment`. Has `type` (`credit` | `debit`), `closeDay` (credit only), `balance` (debit only), `isActive` / `cancelledAt` (soft cancel)
   - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`. `paymentMethod` is the `PaymentMethod` enum: `CASH`, `TRANSFER`, `DEBIT`, `CREDIT`, `OTHER`. Has `walletApplied`.
   - `Budget` → per account + category + month + year (unique together); either a fixed `amount` or a `minAmount`/`maxAmount` range
@@ -196,7 +203,7 @@ res.status(400).json({
 });
 ```
 
-Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `INVALID_PAYMENT_METHOD`, `INSUFFICIENT_FUNDS` (wallet), `INSUFFICIENT_CARD_FUNDS`, `UNSUPPORTED_OPERATION`, `CONFLICT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
+Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `INVALID_PAYMENT_METHOD`, `INSUFFICIENT_FUNDS` (wallet), `INSUFFICIENT_CARD_FUNDS`, `INSTALLMENTS_CHANGED`, `NO_INSTALLMENTS_DUE`, `UNSUPPORTED_OPERATION`, `CONFLICT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
 
 ### Error messages
 
@@ -279,9 +286,11 @@ Every expense paid with a card gets `Installment` rows (`totalInstallments` defa
 
 - Credit card, `totalInstallments > 1` → one `Installment` per installment, `paymentMonth = billingMonth + i` (the first payment is the month AFTER the billing month; roll the year when the month exceeds 12). The expense's `paymentMethod` is `CREDIT`; the installment count lives only in `Installment.totalInstallments`.
 - Credit card, single payment → one `Installment` with `paymentMonth = billingMonth + 1`.
-- Debit card → one `Installment` in the billing month itself.
+- Debit card → one `Installment` in the billing month itself, **born paid** (`isPayed = true`, `paidAt = now`, `walletApplied = false`) because the card balance was already charged.
 - `installmentAmount = totalAmount / totalInstallments`
-- Reports show expenses by `billingMonth` and installments by `paymentMonth`, so the monthly report only shows the installment due THAT month.
+- Reports show expenses by `billingMonth` and installments by `paymentMonth`, so the monthly report only shows the installment due THAT month. Installment items in the monthly and cards reports carry `isPayed`.
+- **Paying installments** (`installmentController`): a manual, irreversible action. The overdue installments are the unpaid ones whose payment month is **before** the current month in `req.timeZone` (an installment of the current month is paid next month). `GET /api/installments/due` previews `{ count, total, month, year, timeZone }`. `POST /api/installments/pay` takes the `expectedTotal` the user confirmed: if it no longer matches, or the installments were already paid, it answers `409 INSTALLMENTS_CHANGED`; with nothing overdue, `400 NO_INSTALLMENTS_DUE`. In one transaction it marks them (`updateMany` filtered by `isPayed: false`, which is what stops a double click, and it runs BEFORE the wallet is touched), sets `paidAt`, and on an account with a wallet takes the whole total (`takeFromWallet`), setting `walletApplied = true`. If the wallet is short nothing is paid. On an account without a wallet it only marks them (`walletApplied = false`). There is no way to un-pay: a mistaken payment is corrected by editing the wallet by hand.
+- Installments that existed before the payment feature were backfilled by the migration: debit ones and credit ones from months before the migration month are paid, with `paidAt = null` and `walletApplied = false`.
 - Changing the payment method to or from `CREDIT` is not supported on update; the user must delete the expense and create it again (`UNSUPORTED_UPDATE_CREDIT_CARD` / `CREDIT_CARD_NOT_UPDATAED`).
 - A `CREDIT` expense only allows editing description, category and notes. Changing its amount, date or card is rejected (`400 UNSUPPORTED_OPERATION`, `CREDIT_EXPENSE_LIMITED_EDIT`); sending the stored values again is accepted. Cash, transfer, other and debit expenses can change amount and date, and their `billingMonth`/`billingYear` (and the debit installment) follow the date.
 
@@ -310,10 +319,11 @@ An account may have one `Wallet`: its free money, outside the debit cards. It is
 - **Helpers (`src/helpers/wallet.js`):** `takeFromWallet(tx, accountId, amount)`, `putIntoWallet(tx, accountId, amount)` and `changeWallet(tx, accountId, delta)` (positive puts money in, negative takes it out). Always pass the transaction client `tx`. They return `{ applied }`; `applied: false` means the account has no wallet and nothing was touched. `takeFromWallet` is a single conditional `UPDATE ... WHERE balance >= amount`. Never read the balance and then write it: two requests could both pass the check. If the money is not there it throws `InsufficientFundsError`, which the error handler turns into `400 INSUFFICIENT_FUNDS` ("Faltan <amount>").
 - **`walletApplied` (on `Expense` and `Income`):** set from the helper's `applied` when the effect is applied. Only what was really applied is reverted. Records created before the wallet existed stay `false` and never move the wallet, not even when edited or deleted. For a `DEBIT` expense it means "the account had a wallet when it was applied".
 - **Incomes:** create puts the amount in; editing the amount moves only the difference; delete takes the amount out. Lowering or deleting an income is blocked when the wallet no longer holds that money.
-- **Expenses** (money logic in `src/helpers/expenseEffect.js`): `CASH`, `TRANSFER` and `OTHER` take the amount from the wallet; delete puts it back. `DEBIT` takes it from the card balance, and is blocked (`INSUFFICIENT_CARD_FUNDS`) if the card is short, but only on accounts with a wallet. `CREDIT` does not move the wallet yet. An edit that changes the method, amount or card is done as revert-then-apply in one transaction, so only the real difference has to be available.
+- **Expenses** (money logic in `src/helpers/expenseEffect.js`): `CASH`, `TRANSFER` and `OTHER` take the amount from the wallet; delete puts it back. `DEBIT` takes it from the card balance, and is blocked (`INSUFFICIENT_CARD_FUNDS`) if the card is short, but only on accounts with a wallet. `CREDIT` does not move the wallet when it is bought (paying its installments does); deleting a credit expense gives back only the installments that were paid through the wallet (`isPayed` and `walletApplied`), never unpaid ones or ones paid on an account without a wallet. An edit that changes the method, amount or card is done as revert-then-apply in one transaction, so only the real difference has to be available.
 - **Debit refunds:** an active card gets its money back. If the card was cancelled or deleted, the refund goes to the wallet (when the expense was tracked). A `DEBIT` expense whose card is cancelled or gone cannot change amount or card until the user picks an active card or another method; editing description, category or notes is always allowed.
 - **Debit cards:** creating one with a balance takes that balance from the wallet; editing the balance moves the difference (loading takes from the wallet, lowering gives back); cancelling gives the whole balance back and sets it to 0; deleting an active card gives back its remaining balance (the expenses stay, without a card link). A cancelled card's balance cannot be edited (`CARD_CANCELLED_BALANCE`).
-- **Not implemented yet (later phases of the design):** `Installment.isPayed` / `paidAt` / `walletApplied`, paying credit installments, `MonthClosing` and the lock on closed months. Credit expenses and their installments therefore do not touch the wallet.
+- **Installment payments** move the wallet too (see the Installment expenses section). `Installment.walletApplied` follows the same rule as the other `walletApplied` fields: only what was really applied is reverted.
+- **Not implemented yet (last phase of the design):** `MonthClosing` and the lock on closed months. Until then every month counts as open, so deleting a credit expense refunds all of its paid installments.
 
 ### Cancelled cards
 

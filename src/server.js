@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const { ERROR_MESSAGES } = require('./helpers/constants');
 const { InsufficientFundsError } = require('./helpers/wallet');
+const timeZoneMiddleware = require('./middleware/timeZoneMiddleware');
 
 const app = express();
 
@@ -21,10 +22,12 @@ const categoryRoutes = require('./routes/category');
 const incomesRoutes = require('./routes/income');
 const budgetsRoutes = require('./routes/budget');
 const walletsRoutes = require('./routes/wallet');
+const installmentsRoutes = require('./routes/installment');
 
 // Middlewares
 app.use(cors({ origin: process.env.FRONTEND_URL }));
 app.use(express.json());
+app.use(timeZoneMiddleware);
 
 // Routes to use and activate
 app.use('/api/auth', authRoutes);
@@ -37,6 +40,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/incomes', incomesRoutes);
 app.use('/api/budgets', budgetsRoutes);
 app.use('/api/wallets', walletsRoutes);
+app.use('/api/installments', installmentsRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
