@@ -1,6 +1,7 @@
 const prisma = require('../helpers/prisma');
 const { ERROR_MESSAGES } = require('../helpers/constants');
-const { parseAmount } = require('../utils/money');
+const { ZERO, parseAmount } = require('../utils/money');
+const { takeFromWallet, putIntoWallet, changeWallet } = require('../helpers/wallet');
 
 // CREATE CARD
 exports.createCard = async (req, res, next) => {
@@ -68,16 +69,25 @@ exports.createCard = async (req, res, next) => {
       }
     }
 
-    const card = await prisma.card.create({
-      data: {
-        accountId: parseInt(accountId),
-        name,
-        bank,
-        type,
-        network,
-        closeDay: type === 'credit' ? parseInt(closeDay) : null,
-        balance: parsedBalance,
-      },
+    // The card and the money moved out of the wallet are written together or not at all
+    const card = await prisma.$transaction(async (tx) => {
+      // The initial balance comes out of the wallet (blocked if it is short). An account
+      // without a wallet is not checked: takeFromWallet does nothing for it.
+      if (parsedBalance && !parsedBalance.isZero()) {
+        await takeFromWallet(tx, account.id, parsedBalance);
+      }
+
+      return tx.card.create({
+        data: {
+          accountId: account.id,
+          name,
+          bank,
+          type,
+          network,
+          closeDay: type === 'credit' ? parseInt(closeDay) : null,
+          balance: parsedBalance,
+        },
+      });
     });
 
     res.status(201).json({
@@ -163,26 +173,53 @@ exports.updateCard = async (req, res, next) => {
     }
 
     const updateData = {};
+    let newBalance = null;
     if (name) updateData.name = name;
     if (card.type === 'debit' && balance !== undefined) {
-      const parsedBalance = parseAmount(balance, { allowZero: true });
+      // A cancelled card keeps no money of its own: its balance went back to the wallet
+      if (!card.isActive) {
+        return res.status(400).json({
+          success: false,
+          error: 'CARD_CANCELLED',
+          message: ERROR_MESSAGES.CARD_CANCELLED_BALANCE,
+        });
+      }
 
-      if (!parsedBalance) {
+      newBalance = parseAmount(balance, { allowZero: true });
+
+      if (!newBalance) {
         return res.status(400).json({
           success: false,
           error: 'INVALID_AMOUNT',
           message: ERROR_MESSAGES.INVALID_AMOUNT_OR_ZERO,
         });
       }
-      updateData.balance = parsedBalance;
+      updateData.balance = newBalance;
     }
     if (card.type === 'credit' && closeDay !== undefined) {
       updateData.closeDay = parseInt(closeDay);
     }
 
-    const updatedCard = await prisma.card.update({
-      where: { id: parseInt(id) },
-      data: updateData,
+    const updatedCard = await prisma.$transaction(async (tx) => {
+      if (newBalance) {
+        // Read the balance inside the transaction so the difference is not stale
+        const current = await tx.card.findUnique({
+          where: { id: card.id },
+          select: { balance: true },
+        });
+        const difference = newBalance.minus(current.balance ?? ZERO);
+
+        // Loading the card takes the difference out of the wallet; lowering it puts it back.
+        // changeWallet moves the wallet, so the sign is the opposite of the card's.
+        if (!difference.isZero()) {
+          await changeWallet(tx, card.accountId, difference.negated());
+        }
+      }
+
+      return tx.card.update({
+        where: { id: card.id },
+        data: updateData,
+      });
     });
 
     res.status(200).json({
@@ -230,9 +267,27 @@ exports.cancelCard = async (req, res, next) => {
       });
     }
 
-    const cancelledCard = await prisma.card.update({
-      where: { id: parseInt(id) },
-      data: { isActive: false, cancelledAt: new Date() },
+    const cancelledCard = await prisma.$transaction(async (tx) => {
+      const data = { isActive: false, cancelledAt: new Date() };
+
+      if (card.type === 'debit') {
+        const current = await tx.card.findUnique({
+          where: { id: card.id },
+          select: { balance: true },
+        });
+
+        // The money left on the card goes back to the wallet. Zero it only when it really
+        // moved, so on an account without a wallet the card keeps its balance as before.
+        if (current.balance && current.balance.gt(0)) {
+          const { applied } = await putIntoWallet(tx, card.accountId, current.balance);
+          if (applied) data.balance = 0;
+        }
+      }
+
+      return tx.card.update({
+        where: { id: card.id },
+        data,
+      });
     });
 
     res.status(200).json({
@@ -272,8 +327,24 @@ exports.deleteCard = async (req, res, next) => {
       });
     }
 
-    await prisma.card.delete({
-      where: { id: parseInt(id) },
+    await prisma.$transaction(async (tx) => {
+      if (card.type === 'debit') {
+        const current = await tx.card.findUnique({
+          where: { id: card.id },
+          select: { balance: true, isActive: true },
+        });
+
+        // Only an active card's balance counts as the account's money; a cancelled card has
+        // already given it back, so there is nothing to return
+        if (current.isActive && current.balance && current.balance.gt(0)) {
+          await putIntoWallet(tx, card.accountId, current.balance);
+        }
+      }
+
+      // The card's installments and expense links are deleted on cascade; the expenses stay
+      await tx.card.delete({
+        where: { id: card.id },
+      });
     });
 
     res.status(200).json({

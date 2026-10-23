@@ -1,5 +1,6 @@
 const prisma = require('../helpers/prisma');
 const { ERROR_MESSAGES } = require('../helpers/constants');
+const { putIntoWallet, takeFromWallet, changeWallet } = require('../helpers/wallet');
 const { parseAmount } = require('../utils/money');
 
 // ============================================
@@ -40,14 +41,21 @@ exports.createIncome = async (req, res, next) => {
       });
     }
 
-    const income = await prisma.income.create({
-      data: {
-        accountId: parseInt(accountId),
-        description: description.trim(),
-        amount: parsedAmount,
-        source,
-        date: new Date(date),
-      },
+    // The income and its effect on the wallet are written together or not at all
+    const income = await prisma.$transaction(async (tx) => {
+      // applied is false when the account has no wallet; then nothing is tracked
+      const { applied } = await putIntoWallet(tx, account.id, parsedAmount);
+
+      return tx.income.create({
+        data: {
+          accountId: account.id,
+          description: description.trim(),
+          amount: parsedAmount,
+          source,
+          date: new Date(date),
+          walletApplied: applied,
+        },
+      });
     });
 
     res.status(201).json({
@@ -220,8 +228,9 @@ exports.updateIncome = async (req, res, next) => {
     if (source) updateData.source = source.trim();
 
     // Check that the ampunt from the body is valid
+    let parsedAmount = null;
     if (amount !== undefined) {
-      const parsedAmount = parseAmount(amount);
+      parsedAmount = parseAmount(amount);
 
       if (!parsedAmount) {
         return res.status(400).json({
@@ -235,9 +244,21 @@ exports.updateIncome = async (req, res, next) => {
 
     if (date) updateData.date = new Date(date);
 
-    const updatedIncome = await prisma.income.update({
-      where: { id: parseInt(id) },
-      data: updateData,
+    const updatedIncome = await prisma.$transaction(async (tx) => {
+      // Only an income that was applied to the wallet moves it, and only by the difference.
+      // A bigger amount puts money in; a smaller one takes it out (blocked if it is not there).
+      if (parsedAmount && income.walletApplied) {
+        const difference = parsedAmount.minus(income.amount);
+
+        if (!difference.isZero()) {
+          await changeWallet(tx, income.accountId, difference);
+        }
+      }
+
+      return tx.income.update({
+        where: { id: income.id },
+        data: updateData,
+      });
     });
 
     res.status(200).json({
@@ -279,8 +300,15 @@ exports.deleteIncome = async (req, res, next) => {
       });
     }
 
-    await prisma.income.delete({
-      where: { id: parseInt(id) },
+    await prisma.$transaction(async (tx) => {
+      // Only revert what was really applied; blocked if that money is no longer in the wallet
+      if (income.walletApplied) {
+        await takeFromWallet(tx, income.accountId, income.amount);
+      }
+
+      await tx.income.delete({
+        where: { id: income.id },
+      });
     });
 
     res.status(200).json({
