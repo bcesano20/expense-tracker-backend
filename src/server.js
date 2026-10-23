@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+const { ERROR_MESSAGES } = require('./helpers/constants');
+const { InsufficientFundsError } = require('./helpers/wallet');
+
 const app = express();
 
 // Railway sits behind one reverse proxy; trust it so req.ip is the real client IP
@@ -17,6 +20,7 @@ const reportsRoutes = require('./routes/report');
 const categoryRoutes = require('./routes/category');
 const incomesRoutes = require('./routes/income');
 const budgetsRoutes = require('./routes/budget');
+const walletsRoutes = require('./routes/wallet');
 
 // Middlewares
 app.use(cors({ origin: process.env.FRONTEND_URL }));
@@ -32,6 +36,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/incomes', incomesRoutes);
 app.use('/api/budgets', budgetsRoutes);
+app.use('/api/wallets', walletsRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
@@ -41,6 +46,17 @@ app.get('/api/test', (req, res) => {
 // Express identifies error handlers by their 4 parameters, so `next` must stay even if unused
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  // Expected business error raised by the wallet helpers: tell the user how much is missing
+  if (err instanceof InsufficientFundsError) {
+    const isCard = err.source === 'card';
+
+    return res.status(400).json({
+      success: false,
+      error: isCard ? 'INSUFFICIENT_CARD_FUNDS' : 'INSUFFICIENT_FUNDS',
+      message: `${isCard ? ERROR_MESSAGES.INSUFFICIENT_CARD_FUNDS : ERROR_MESSAGES.INSUFFICIENT_FUNDS}. Faltan ${err.shortfall.toFixed(2)}`,
+    });
+  }
+
   console.error(err);
   res.status(500).json({
     success: false,

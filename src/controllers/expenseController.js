@@ -2,13 +2,10 @@ const { PaymentMethod } = require('@prisma/client');
 
 const prisma = require('../helpers/prisma');
 const { ERROR_MESSAGES } = require('../helpers/constants');
+const { applyExpenseEffect, revertExpenseEffect } = require('../helpers/expenseEffect');
 const { calculateBillingMonth } = require('../utils/billingCalculator');
 const { splitAmount, parseAmount } = require('../utils/money');
-const {
-  CARD_METHODS,
-  NON_CARD_METHODS,
-  normalizePaymentMethod,
-} = require('../utils/paymentMethod');
+const { CARD_METHODS, normalizePaymentMethod } = require('../utils/paymentMethod');
 
 // ============================================
 // CREATE EXPENSE
@@ -104,7 +101,6 @@ exports.createExpense = async (req, res, next) => {
 
     let cardData = null;
     let totalInstallmentsToCreate = [];
-    let shouldDecrementBalance = false;
 
     // If the expense is with card
     if (isCardMethod) {
@@ -204,9 +200,6 @@ exports.createExpense = async (req, res, next) => {
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
 
-        // Balance is reduced inside the transaction below
-        shouldDecrementBalance = true;
-
         cardData = {
           cardId: parseInt(cardId),
         };
@@ -234,20 +227,17 @@ exports.createExpense = async (req, res, next) => {
 
     // 4. WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     const detailedExpense = await prisma.$transaction(async (tx) => {
-      // Debit card: reduce the balance
-      if (shouldDecrementBalance) {
-        await tx.card.update({
-          where: { id: parseInt(cardId) },
-          data: {
-            balance: {
-              decrement: parsedAmount,
-            },
-          },
-        });
-      }
+      // Take the money from where it comes from: the wallet (cash, transfer, other) or the debit
+      // card. Blocked if it is short; a credit expense moves nothing yet.
+      const { walletApplied } = await applyExpenseEffect(tx, {
+        accountId: expenseData.accountId,
+        method: expenseData.paymentMethod,
+        amount: parsedAmount,
+        cardId: cardId ? parseInt(cardId) : null,
+      });
 
       const expense = await tx.expense.create({
-        data: expenseData,
+        data: { ...expenseData, walletApplied },
       });
 
       // Relation with card ( if apply )
@@ -465,172 +455,180 @@ exports.updateExpense = async (req, res, next) => {
       });
     }
 
-    const updateData = {};
-    // Card-related writes, executed inside the transaction before the expense update
-    const cardWrites = [];
+    const oldMethod = expense.paymentMethod;
+    const newMethod = paymentMethod ? normalizePaymentMethod(paymentMethod) : oldMethod;
 
-    if (description) updateData.description = description.trim();
+    if (!newMethod) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_PAYMENT_METHOD',
+        message: ERROR_MESSAGES.INVALID_PAYMENT_METHOD,
+      });
+    }
+
+    let newAmount = expense.amount;
     if (amount) {
-      const parsedAmount = parseAmount(amount);
+      newAmount = parseAmount(amount);
 
-      if (!parsedAmount) {
+      if (!newAmount) {
         return res.status(400).json({
           success: false,
           error: 'INVALID_AMOUNT',
           message: ERROR_MESSAGES.INVALID_AMOUNT,
         });
       }
-      updateData.amount = parsedAmount;
     }
+
+    const newDate = date ? new Date(date) : expense.date;
+    // An edit form usually sends the date even when it did not change, so compare the day
+    const day = (value) => value.toISOString().slice(0, 10);
+    const dateChanged = Boolean(date) && day(newDate) !== day(expense.date);
+    const oldCardId = expense.card ? expense.card.cardId : null;
+
+    const updateData = {};
+    if (description) updateData.description = description.trim();
     if (categoryId) updateData.categoryId = parseInt(categoryId);
-    if (date) updateData.date = new Date(date);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
-    // Handle payment method change
-    if (paymentMethod) {
-      const oldMethod = expense.paymentMethod;
-      const newMethod = normalizePaymentMethod(paymentMethod);
+    // Set below for the expenses whose money can move (everything except credit)
+    let moneyChanged = false;
+    let newCardId = null;
 
-      if (!newMethod) {
+    if (oldMethod === PaymentMethod.CREDIT) {
+      // A credit expense only allows description, category and notes. Sending the stored
+      // amount, date or card again (as an edit form does) is fine; changing them is not.
+      if (newMethod !== PaymentMethod.CREDIT) {
         return res.status(400).json({
           success: false,
-          error: 'INVALID_PAYMENT_METHOD',
-          message: ERROR_MESSAGES.INVALID_PAYMENT_METHOD,
+          error: 'UNSUPPORTED_OPERATION',
+          message: ERROR_MESSAGES.UNSUPORTED_UPDATE_CREDIT_CARD,
         });
       }
 
-      if (newMethod !== oldMethod) {
-        // Block changes to or from credit (delete the expense and create it again)
-        if (oldMethod === PaymentMethod.CREDIT) {
+      const changesAmount = !newAmount.equals(expense.amount);
+      const changesCard = cardId && parseInt(cardId) !== oldCardId;
+
+      if (changesAmount || dateChanged || changesCard) {
+        return res.status(400).json({
+          success: false,
+          error: 'UNSUPPORTED_OPERATION',
+          message: ERROR_MESSAGES.CREDIT_EXPENSE_LIMITED_EDIT,
+        });
+      }
+    } else {
+      if (newMethod === PaymentMethod.CREDIT) {
+        return res.status(400).json({
+          success: false,
+          error: 'UNSUPPORTED_OPERATION',
+          message: ERROR_MESSAGES.CREDIT_CARD_NOT_UPDATAED,
+        });
+      }
+
+      // A debit expense keeps its card unless another one is sent; cash, transfer and other have none
+      if (newMethod === PaymentMethod.DEBIT) {
+        newCardId = cardId ? parseInt(cardId) : oldCardId;
+      }
+
+      const methodChanged = newMethod !== oldMethod;
+      const amountChanged = !newAmount.equals(expense.amount);
+      const cardChanged = newMethod === PaymentMethod.DEBIT && newCardId !== oldCardId;
+      moneyChanged = methodChanged || amountChanged || cardChanged;
+
+      // The card is only checked when money has to be taken from it
+      if (moneyChanged && newMethod === PaymentMethod.DEBIT) {
+        if (!newCardId) {
           return res.status(400).json({
             success: false,
-            error: 'UNSUPPORTED_OPERATION',
-            message: ERROR_MESSAGES.UNSUPORTED_UPDATE_CREDIT_CARD,
+            error: 'VALIDATION_ERROR',
+            message: ERROR_MESSAGES.CARD_REQUIRED_FOR_PAYMENT_METHOD,
           });
         }
 
-        if (newMethod === PaymentMethod.CREDIT) {
+        const newCard = await prisma.card.findUnique({ where: { id: newCardId } });
+
+        if (!newCard || newCard.accountId !== expense.accountId) {
+          return res.status(404).json({
+            success: false,
+            error: 'CARD_NOT_FOUND',
+            message: ERROR_MESSAGES.CARD_NOT_FOUND,
+          });
+        }
+
+        if (!newCard.isActive) {
           return res.status(400).json({
             success: false,
-            error: 'UNSUPPORTED_OPERATION',
-            message: ERROR_MESSAGES.CREDIT_CARD_NOT_UPDATAED,
+            error: 'CARD_CANCELLED',
+            message: ERROR_MESSAGES.CARD_CANCELLED,
           });
         }
 
-        if (oldMethod === PaymentMethod.DEBIT) {
-          if (!expense.card) {
-            return res.status(400).json({
-              success: false,
-              error: 'UNSUPPORTED_OPERATION',
-              message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION,
-            });
-          }
-
-          // Debit card → non-card: restore balance and remove card records
-          if (!NON_CARD_METHODS.includes(newMethod)) {
-            return res.status(400).json({
-              success: false,
-              error: 'UNSUPPORTED_OPERATION',
-              message: ERROR_MESSAGES.DELETE_EXPENSE_CREATE_AGAIN,
-            });
-          }
-
-          cardWrites.push(async (tx) => {
-            await tx.card.update({
-              where: { id: expense.card.cardId },
-              data: { balance: { increment: expense.amount } },
-            });
-
-            await tx.installment.deleteMany({ where: { expenseId: expense.id } });
-            await tx.expenseCard.delete({ where: { expenseId: expense.id } });
+        if (newCard.type !== 'debit') {
+          return res.status(400).json({
+            success: false,
+            error: 'VALIDATION_ERROR',
+            message: ERROR_MESSAGES.PAYMENT_METHOD_CARD_MISMATCH,
           });
-
-          updateData.paymentMethod = newMethod;
-        } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === PaymentMethod.DEBIT) {
-          // Non-card → debit card
-          if (!cardId) {
-            return res.status(400).json({
-              success: false,
-              error: 'VALIDATION_ERROR',
-              message: ERROR_MESSAGES.CARD_REQUIRED_FOR_PAYMENT_METHOD,
-            });
-          }
-
-          const newCard = await prisma.card.findUnique({
-            where: { id: parseInt(cardId) },
-          });
-
-          if (!newCard || newCard.accountId !== expense.accountId) {
-            return res.status(404).json({
-              success: false,
-              error: 'CARD_NOT_FOUND',
-              message: ERROR_MESSAGES.CARD_NOT_FOUND,
-            });
-          }
-
-          if (!newCard.isActive) {
-            return res.status(400).json({
-              success: false,
-              error: 'CARD_CANCELLED',
-              message: ERROR_MESSAGES.CARD_CANCELLED,
-            });
-          }
-
-          if (newCard.type === 'credit') {
-            return res.status(400).json({
-              success: false,
-              error: 'UNSUPPORTED_OPERATION',
-              message: ERROR_MESSAGES.CREDIT_CARD_NOT_UPDATAED,
-            });
-          }
-
-          // Use updated date if provided, otherwise fall back to existing
-          const expenseDate = updateData.date ?? expense.date;
-          const billingMonth = expenseDate.getMonth() + 1;
-          const billingYear = expenseDate.getFullYear();
-          const finalAmount = updateData.amount ?? expense.amount;
-
-          cardWrites.push(async (tx) => {
-            await tx.card.update({
-              where: { id: newCard.id },
-              data: { balance: { decrement: finalAmount } },
-            });
-
-            await tx.expenseCard.create({
-              data: { expenseId: expense.id, cardId: newCard.id },
-            });
-
-            await tx.installment.create({
-              data: {
-                expenseId: expense.id,
-                cardId: newCard.id,
-                installmentNumber: 1,
-                totalInstallments: 1,
-                installmentAmount: finalAmount,
-                paymentMonth: billingMonth,
-                paymentYear: billingYear,
-              },
-            });
-          });
-
-          updateData.paymentMethod = PaymentMethod.DEBIT;
-          updateData.billingMonth = billingMonth;
-          updateData.billingYear = billingYear;
-        } else if (NON_CARD_METHODS.includes(oldMethod) && NON_CARD_METHODS.includes(newMethod)) {
-          // Non-card to non-card: just update the field
-          updateData.paymentMethod = newMethod;
         }
+      }
+
+      if (methodChanged) updateData.paymentMethod = newMethod;
+      if (amountChanged) updateData.amount = newAmount;
+
+      // Cash, transfer, other and debit are billed in the month of their date
+      if (date) {
+        updateData.date = newDate;
+        updateData.billingMonth = newDate.getMonth() + 1;
+        updateData.billingYear = newDate.getFullYear();
       }
     }
 
     // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     const updatedExpense = await prisma.$transaction(async (tx) => {
-      for (const write of cardWrites) {
-        await write(tx);
+      if (moneyChanged) {
+        // First give back what the old version took, then take what the new one needs. The refund
+        // is already counted when the new amount is checked, so only the real difference has to
+        // be available (cash -> transfer with a bigger amount needs just the extra money).
+        await revertExpenseEffect(tx, expense);
+
+        const { walletApplied } = await applyExpenseEffect(tx, {
+          accountId: expense.accountId,
+          method: newMethod,
+          amount: newAmount,
+          cardId: newCardId,
+          // An expense from before the wallet existed never touches it
+          trackWallet: expense.walletApplied,
+        });
+
+        updateData.walletApplied = walletApplied;
+      }
+
+      // The card link and the installment of a debit expense follow the expense
+      if (oldMethod === PaymentMethod.DEBIT && newMethod !== PaymentMethod.DEBIT) {
+        await tx.installment.deleteMany({ where: { expenseId: expense.id } });
+        await tx.expenseCard.deleteMany({ where: { expenseId: expense.id } });
+      } else if (newMethod === PaymentMethod.DEBIT && newCardId && (moneyChanged || dateChanged)) {
+        // No card id means its card was deleted: there is no link or installment to rebuild
+        const billingMonth = updateData.billingMonth ?? expense.billingMonth;
+        const billingYear = updateData.billingYear ?? expense.billingYear;
+
+        await tx.installment.deleteMany({ where: { expenseId: expense.id } });
+        await tx.expenseCard.deleteMany({ where: { expenseId: expense.id } });
+        await tx.expenseCard.create({ data: { expenseId: expense.id, cardId: newCardId } });
+        await tx.installment.create({
+          data: {
+            expenseId: expense.id,
+            cardId: newCardId,
+            installmentNumber: 1,
+            totalInstallments: 1,
+            installmentAmount: newAmount,
+            paymentMonth: billingMonth,
+            paymentYear: billingYear,
+          },
+        });
       }
 
       return tx.expense.update({
-        where: { id: parseInt(id) },
+        where: { id: expense.id },
         data: updateData,
         include: {
           category: true,
@@ -685,26 +683,14 @@ exports.deleteExpense = async (req, res, next) => {
       });
     }
 
-    // If was an expense with debit card, the salary must be restored
-    const debitCardId =
-      expense.paymentMethod === PaymentMethod.DEBIT && expense.card ? expense.card.cardId : null;
-
     // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     await prisma.$transaction(async (tx) => {
-      if (debitCardId) {
-        await tx.card.update({
-          where: { id: debitCardId },
-          data: {
-            balance: {
-              increment: expense.amount,
-            },
-          },
-        });
-      }
+      // Give the money back to where it came from: the wallet or the debit card
+      await revertExpenseEffect(tx, expense);
 
-      // The totalInstallments are deleted on cascade
+      // The installments are deleted on cascade
       await tx.expense.delete({
-        where: { id: parseInt(id) },
+        where: { id: expense.id },
       });
     });
 

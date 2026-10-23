@@ -66,25 +66,29 @@ src/
 │   ├── expenseController.js
 │   ├── incomeController.js
 │   ├── reportController.js
-│   └── userController.js
+│   ├── userController.js
+│   └── walletController.js
 ├── routes/                    # Endpoint definitions (one file per resource, singular names)
 │   ├── account.js  auth.js  budget.js  card.js  category.js
-│   └── expense.js  income.js  report.js  user.js
+│   └── expense.js  income.js  report.js  user.js  wallet.js
 ├── middleware/
 │   ├── authMiddleware.js      # JWT validation, sets req.user
 │   └── rateLimiter.js         # authLimiter: 10 attempts / 15 min per IP
 ├── helpers/
-│   ├── prisma.js              # Shared PrismaClient (single connection pool)
-│   └── constants.js           # ERROR_MESSAGES (Spanish user-facing messages)
+│   ├── prisma.js              # Shared PrismaClient (single connection pool); Decimal.toJSON -> number
+│   ├── constants.js           # ERROR_MESSAGES (Spanish user-facing messages)
+│   ├── wallet.js              # takeFromWallet / putIntoWallet / changeWallet, InsufficientFundsError
+│   └── expenseEffect.js       # applyExpenseEffect / revertExpenseEffect (where an expense's money comes from)
 └── utils/
     ├── billingCalculator.js   # calculateBillingMonth(expenseDate, cardCloseDay)
+    ├── money.js               # parseAmount, splitAmount, sumField, ZERO (Decimal helpers)
     └── paymentMethod.js       # CARD_METHODS / NON_CARD_METHODS, normalizePaymentMethod (enum check)
 prisma/
 ├── schema.prisma
 └── migrations/
 ```
 
-The centralized error handler is currently an inline `app.use((err, req, res, next) => ...)` at the bottom of `server.js` (returns `500 SERVER_ERROR`). There is no separate `errorHandler.js`, `utils/jwt.js` or `utils/validators.js`.
+The centralized error handler is currently an inline `app.use((err, req, res, next) => ...)` at the bottom of `server.js`. It maps `InsufficientFundsError` to a `400` (`INSUFFICIENT_FUNDS` / `INSUFFICIENT_CARD_FUNDS`) and answers every other error with `500 SERVER_ERROR`. There is no separate `errorHandler.js`, `utils/jwt.js` or `utils/validators.js`.
 
 ### API surface
 
@@ -100,6 +104,7 @@ All routes are mounted under `/api` in `server.js`. Everything except `register`
 | `/api/expenses` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
 | `/api/incomes` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
 | `/api/budgets` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
+| `/api/wallets` | `GET /account/:accountId` (with the calculated total), `POST /account/:accountId` (activate with initial balance), `PUT /account/:accountId` (set the new total value) |
 | `/api/reports` | `GET /monthly`, `/summary`, `/category`, `/cards`, `/comparison`, `/budget-status`, `/income-ratio` |
 | `/api/test` | `GET` health check |
 
@@ -133,11 +138,12 @@ exports.createExpense = async (req, res, next) => {
 - **Always import the shared client:** `const prisma = require('../helpers/prisma');`. Never call `new PrismaClient()` in a controller.
 - **Models and relations:**
   - `User` → many `Account`, many `Category` (categories are per user)
-  - `Account` → many `Card`, `Expense`, `Income`, `Budget`
+  - `Account` → many `Card`, `Expense`, `Income`, `Budget`; optional one-to-one `Wallet`
+  - `Wallet` → `accountId` unique, `balance Decimal(12,2)` (default 0, never negative: DB `CHECK`). See the Wallet section
   - `Card` → many `ExpenseCard`, many `Installment`. Has `type` (`credit` | `debit`), `closeDay` (credit only), `balance` (debit only), `isActive` / `cancelledAt` (soft cancel)
-  - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`. `paymentMethod` is the `PaymentMethod` enum: `CASH`, `TRANSFER`, `DEBIT`, `CREDIT`, `OTHER`.
+  - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`. `paymentMethod` is the `PaymentMethod` enum: `CASH`, `TRANSFER`, `DEBIT`, `CREDIT`, `OTHER`. Has `walletApplied`.
   - `Budget` → per account + category + month + year (unique together); either a fixed `amount` or a `minAmount`/`maxAmount` range
-  - `Income` → belongs to an `Account` (`source`: salary, sales, investment, other)
+  - `Income` → belongs to an `Account` (`source`: salary, sales, investment, other). Has `walletApplied`.
 - Deleting a `User`, `Account`, `Card` or `Expense` cascades to its children.
 - **Critical rule:** `billingMonth`/`billingYear` on an expense are calculated from `date` vs the card's `closeDay`.
 
@@ -185,12 +191,12 @@ res.status(201).json({
 ```javascript
 res.status(400).json({
   success: false,
-  error: "VALIDATION_ERROR",
-  message: ERROR_MESSAGES.AMOUNT_MORE_0
+  error: "INVALID_AMOUNT",
+  message: ERROR_MESSAGES.INVALID_AMOUNT
 });
 ```
 
-Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
+Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `INVALID_PAYMENT_METHOD`, `INSUFFICIENT_FUNDS` (wallet), `INSUFFICIENT_CARD_FUNDS`, `UNSUPPORTED_OPERATION`, `CONFLICT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
 
 ### Error messages
 
@@ -264,7 +270,7 @@ calculateBillingMonth(new Date(date), card.closeDay);
 ```
 
 - **Credit card:** `day > closeDay` → billed next month (December rolls to January of the next year), otherwise the same month.
-- **Debit card:** billed the same month as the expense date; the expense amount is decremented from `card.balance`.
+- **Debit card:** billed the same month as the expense date; the expense amount is decremented from `card.balance` (and blocked if the card is short, but only on accounts with a wallet; see the Wallet section).
 - **Cash / transfer / other:** billed the same month as the expense date.
 
 ### Installment expenses
@@ -276,7 +282,8 @@ Every expense paid with a card gets `Installment` rows (`totalInstallments` defa
 - Debit card → one `Installment` in the billing month itself.
 - `installmentAmount = totalAmount / totalInstallments`
 - Reports show expenses by `billingMonth` and installments by `paymentMonth`, so the monthly report only shows the installment due THAT month.
-- Changing the payment method to or from `CREDIT` is not supported on update; the user must delete the expense and create it again (`UNSUPORTED_UPDATE_*` messages).
+- Changing the payment method to or from `CREDIT` is not supported on update; the user must delete the expense and create it again (`UNSUPORTED_UPDATE_CREDIT_CARD` / `CREDIT_CARD_NOT_UPDATAED`).
+- A `CREDIT` expense only allows editing description, category and notes. Changing its amount, date or card is rejected (`400 UNSUPPORTED_OPERATION`, `CREDIT_EXPENSE_LIMITED_EDIT`); sending the stored values again is accepted. Cash, transfer, other and debit expenses can change amount and date, and their `billingMonth`/`billingYear` (and the debit installment) follow the date.
 
 ### Payment method (`PaymentMethod` enum)
 
@@ -284,13 +291,33 @@ Every expense paid with a card gets `Installment` rows (`totalInstallments` defa
 - Import the enum from `@prisma/client` and the groupings from `src/utils/paymentMethod.js`. Never compare against string literals like `'card'`.
 - The API only accepts the enum values (uppercase). The old lowercase values (`cash`, `card`, `card-installments-<n>`, ...) are rejected with `400 INVALID_PAYMENT_METHOD`.
 
+### Money amounts
+
+- Every amount column is `Decimal(12, 2)`. Validate request amounts with `parseAmount(value, { allowZero })` from `src/utils/money.js`: it returns an exact `Prisma.Decimal`, or `null` for anything that is not a number, is negative (or 0 unless `allowZero`), has more than 2 decimals or exceeds `9999999999.99`. Answer `null` with `400 INVALID_AMOUNT` (`ERROR_MESSAGES.INVALID_AMOUNT`, or `INVALID_AMOUNT_OR_ZERO` where 0 is valid, e.g. a card or wallet balance). Never use `parseFloat` on money.
+- Never compare `Decimal`s with `<`, `>=` or `==`: JavaScript compares them as strings (`Decimal(9) >= Decimal(10)` is `true`). Use `.gt() .gte() .lt() .lte() .equals()`.
+- `src/helpers/prisma.js` overrides `Decimal.toJSON`, so responses carry amounts as plain numbers.
+
 ### Atomic writes
 
-Any operation that writes more than one table (expense + `ExpenseCard` + `Installment` + card balance) must run inside `prisma.$transaction(async (tx) => { ... })` and use `tx` for every query inside it, so an error rolls everything back.
+Any operation that writes more than one table (expense + `ExpenseCard` + `Installment` + card balance + wallet) must run inside `prisma.$transaction(async (tx) => { ... })` and use `tx` for every query inside it, so an error rolls everything back. A blocked operation (`InsufficientFundsError`) rolls back everything in the same request, including the description or any other field sent with it.
+
+### Wallet (optional per account)
+
+An account may have one `Wallet`: its free money, outside the debit cards. It is activated, read and edited through `/api/wallets/account/:accountId` (the `PUT` sets a new total value; it is a correction, not an income). The total balance (`walletBalance + balance of the ACTIVE debit cards`) is calculated on read and never stored.
+
+**An account without a wallet works exactly as before.** Every rule below applies only once the wallet is activated, and no existing record is touched retroactively.
+
+- **Helpers (`src/helpers/wallet.js`):** `takeFromWallet(tx, accountId, amount)`, `putIntoWallet(tx, accountId, amount)` and `changeWallet(tx, accountId, delta)` (positive puts money in, negative takes it out). Always pass the transaction client `tx`. They return `{ applied }`; `applied: false` means the account has no wallet and nothing was touched. `takeFromWallet` is a single conditional `UPDATE ... WHERE balance >= amount`. Never read the balance and then write it: two requests could both pass the check. If the money is not there it throws `InsufficientFundsError`, which the error handler turns into `400 INSUFFICIENT_FUNDS` ("Faltan <amount>").
+- **`walletApplied` (on `Expense` and `Income`):** set from the helper's `applied` when the effect is applied. Only what was really applied is reverted. Records created before the wallet existed stay `false` and never move the wallet, not even when edited or deleted. For a `DEBIT` expense it means "the account had a wallet when it was applied".
+- **Incomes:** create puts the amount in; editing the amount moves only the difference; delete takes the amount out. Lowering or deleting an income is blocked when the wallet no longer holds that money.
+- **Expenses** (money logic in `src/helpers/expenseEffect.js`): `CASH`, `TRANSFER` and `OTHER` take the amount from the wallet; delete puts it back. `DEBIT` takes it from the card balance, and is blocked (`INSUFFICIENT_CARD_FUNDS`) if the card is short, but only on accounts with a wallet. `CREDIT` does not move the wallet yet. An edit that changes the method, amount or card is done as revert-then-apply in one transaction, so only the real difference has to be available.
+- **Debit refunds:** an active card gets its money back. If the card was cancelled or deleted, the refund goes to the wallet (when the expense was tracked). A `DEBIT` expense whose card is cancelled or gone cannot change amount or card until the user picks an active card or another method; editing description, category or notes is always allowed.
+- **Debit cards:** creating one with a balance takes that balance from the wallet; editing the balance moves the difference (loading takes from the wallet, lowering gives back); cancelling gives the whole balance back and sets it to 0; deleting an active card gives back its remaining balance (the expenses stay, without a card link). A cancelled card's balance cannot be edited (`CARD_CANCELLED_BALANCE`).
+- **Not implemented yet (later phases of the design):** `Installment.isPayed` / `paidAt` / `walletApplied`, paying credit installments, `MonthClosing` and the lock on closed months. Credit expenses and their installments therefore do not touch the wallet.
 
 ### Cancelled cards
 
-`PATCH /api/cards/:id/cancel` sets `isActive = false` and `cancelledAt`. History is kept, but new expenses with a cancelled card are rejected with `CARD_CANCELLED`.
+`PATCH /api/cards/:id/cancel` sets `isActive = false` and `cancelledAt`. History is kept, but new expenses with a cancelled card are rejected with `CARD_CANCELLED`. On an account with a wallet, a debit card's remaining balance goes back to the wallet and the card is left at 0.
 
 ---
 
@@ -308,11 +335,12 @@ if (!accountId || !description || !amount || !date || !categoryId || !paymentMet
   });
 }
 
-if (amount <= 0) {
+const parsedAmount = parseAmount(amount); // exact Prisma.Decimal, or null (never parseFloat)
+if (!parsedAmount) {
   return res.status(400).json({
     success: false,
     error: 'INVALID_AMOUNT',
-    message: ERROR_MESSAGES.AMOUNT_MORE_0,
+    message: ERROR_MESSAGES.INVALID_AMOUNT,
   });
 }
 
@@ -356,6 +384,8 @@ When adding a new route, make sure to:
 - [ ] **Use camelCase** in JSON responses
 - [ ] **Use authMiddleware** if authentication is required
 - [ ] **Use `prisma.$transaction`** when writing to more than one table
+- [ ] **Validate amounts with `parseAmount`** (never `parseFloat`) and compare `Decimal`s with their methods
+- [ ] **Use the wallet helpers inside the transaction** if the route moves money, and store `walletApplied` from their result (see the Wallet section)
 - [ ] **Add a rate limiter** if the route is public and sensitive (login-like)
 - [ ] **Document business rules** if any (e.g.: billing month logic)
 - [ ] **Register the route** in `server.js` and update the API surface table above
@@ -373,6 +403,8 @@ router.post('/', authMiddleware, expenseController.createExpense);
 // controllers/expenseController.js
 const { ERROR_MESSAGES } = require('../helpers/constants');
 const { calculateBillingMonth } = require('../utils/billingCalculator');
+const { parseAmount } = require('../utils/money');
+const { applyExpenseEffect } = require('../helpers/expenseEffect');
 const prisma = require('../helpers/prisma');
 
 exports.createExpense = async (req, res, next) => {
@@ -387,6 +419,15 @@ exports.createExpense = async (req, res, next) => {
         success: false,
         error: 'VALIDATION_ERROR',
         message: 'La cuenta, descripcion, monto, fecha, categoria y medio de pago son requeridos',
+      });
+    }
+
+    const parsedAmount = parseAmount(amount); // exact Prisma.Decimal, or null
+    if (!parsedAmount) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_AMOUNT',
+        message: ERROR_MESSAGES.INVALID_AMOUNT,
       });
     }
 
@@ -406,16 +447,25 @@ exports.createExpense = async (req, res, next) => {
 
     // 5. Save to DB atomically
     const expense = await prisma.$transaction(async (tx) => {
+      // Take the money from the wallet / debit card first; throws if it is short
+      const { walletApplied } = await applyExpenseEffect(tx, {
+        accountId: account.id,
+        method: paymentMethod,
+        amount: parsedAmount,
+        cardId: cardId ? parseInt(cardId) : null,
+      });
+
       const created = await tx.expense.create({
         data: {
-          accountId: parseInt(accountId),
+          accountId: account.id,
           description: description.trim(),
-          amount: parseFloat(amount),
+          amount: parsedAmount,
           date: new Date(date),
           categoryId: parseInt(categoryId),
           paymentMethod,
           billingMonth,
           billingYear,
+          walletApplied,
         },
       });
       // ...ExpenseCard / Installment rows with tx.*
@@ -434,7 +484,7 @@ exports.createExpense = async (req, res, next) => {
 };
 ```
 
-(Simplified. See `expenseController.js` for the complete card/installment/debit-balance logic, including the null checks on `card`.)
+(Simplified. See `expenseController.js` for the complete card/installment logic, including the null checks on `card`, and the update flow that reverts the old effect before applying the new one.)
 
 ---
 

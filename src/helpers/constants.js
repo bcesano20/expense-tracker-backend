@@ -40,7 +40,15 @@ const ERROR_MESSAGES = {
   CREDIT_CARD_NOT_UPDATAED:
     'No se puede cambiar a tarjeta de crédito desde otro método de pago. Por favor elimine este gasto y vuelva a crearlo como uno de crédito',
   CARD_CANCELLED: 'La tarjeta está cancelada y no se pueden registrar nuevos gastos con ella',
+  CARD_CANCELLED_BALANCE: 'No se puede modificar el saldo de una tarjeta cancelada',
   CARD_CANCEL_SUCCESS: 'Tarjeta cancelada correctamente',
+  INSUFFICIENT_FUNDS: 'Saldo insuficiente en la billetera',
+  INSUFFICIENT_CARD_FUNDS: 'Saldo insuficiente en la tarjeta',
+  CREDIT_EXPENSE_LIMITED_EDIT:
+    'Los gastos con tarjeta de crédito solo permiten editar descripción, categoría y notas. Para cambiar monto, fecha o tarjeta elimina el gasto y créalo de nuevo',
+  WALLET_ACCOUNT_PERMISSION: 'No tienes permiso para operar sobre la billetera de esta cuenta',
+  WALLET_ALREADY_EXISTS: 'La cuenta ya tiene una billetera',
+  WALLET_NOT_FOUND: 'La cuenta no tiene una billetera',
   TOO_MANY_ATTEMPTS: 'Demasiados intentos. Intenta nuevamente en 15 minutos',
 };
 
