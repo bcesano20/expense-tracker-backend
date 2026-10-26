@@ -3,12 +3,14 @@ const { Prisma, PaymentMethod } = require('@prisma/client');
 const { NON_CARD_METHODS } = require('../utils/paymentMethod');
 const { ZERO, sumField } = require('../utils/money');
 const { InsufficientFundsError, takeFromWallet, putIntoWallet } = require('./wallet');
+const { findClosedMonths } = require('./monthClosing');
 
 // Where the money of an expense comes from, and how to give it back:
 //   CASH / TRANSFER / OTHER -> the wallet (only if the expense was applied to it)
 //   DEBIT                   -> the balance of the debit card
 //   CREDIT                  -> nothing when it is bought; the user pays its installments later (see
-//                              installmentController). Only deleting it refunds the paid ones.
+//                              installmentController). Only deleting it refunds the paid ones
+//                              that sit in open months.
 // Every function takes the transaction client `tx`, so it rolls back with the rest of the operation.
 
 // Takes the amount from a debit card. When `checkBalance` is true (the account has a wallet) the
@@ -97,10 +99,23 @@ const revertExpenseEffect = async (tx, expense) => {
     // never took money from it, so there is nothing to return.
     const paidInstallments = await tx.installment.findMany({
       where: { expenseId: expense.id, isPayed: true, walletApplied: true },
-      select: { installmentAmount: true },
+      select: { installmentAmount: true, paymentMonth: true, paymentYear: true },
     });
 
-    const paidTotal = sumField(paidInstallments, 'installmentAmount');
+    // The money of an installment that sits in a CLOSED month was spent in that month and stays
+    // spent: only the installments of open months go back to the wallet
+    const closedMonths = await findClosedMonths(
+      tx,
+      expense.accountId,
+      paidInstallments.map((i) => ({ month: i.paymentMonth, year: i.paymentYear }))
+    );
+    const isClosed = (i) =>
+      closedMonths.some((m) => m.month === i.paymentMonth && m.year === i.paymentYear);
+
+    const paidTotal = sumField(
+      paidInstallments.filter((i) => !isClosed(i)),
+      'installmentAmount'
+    );
 
     if (paidTotal.gt(0)) {
       await putIntoWallet(tx, expense.accountId, paidTotal);
