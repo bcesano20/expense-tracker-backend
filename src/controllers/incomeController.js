@@ -1,6 +1,7 @@
 const prisma = require('../helpers/prisma');
 const { ERROR_MESSAGES } = require('../helpers/constants');
 const { putIntoWallet, takeFromWallet, changeWallet } = require('../helpers/wallet');
+const { assertMonthsOpen, monthOfDate } = require('../helpers/monthClosing');
 const { parseAmount } = require('../utils/money');
 
 // ============================================
@@ -43,6 +44,9 @@ exports.createIncome = async (req, res, next) => {
 
     // The income and its effect on the wallet are written together or not at all
     const income = await prisma.$transaction(async (tx) => {
+      // A closed month cannot receive new incomes
+      await assertMonthsOpen(tx, account.id, [monthOfDate(new Date(date))]);
+
       // applied is false when the account has no wallet; then nothing is tracked
       const { applied } = await putIntoWallet(tx, account.id, parsedAmount);
 
@@ -245,6 +249,11 @@ exports.updateIncome = async (req, res, next) => {
     if (date) updateData.date = new Date(date);
 
     const updatedIncome = await prisma.$transaction(async (tx) => {
+      // Neither the month the income is in, nor the month it is moved to, can be closed
+      const touchedMonths = [monthOfDate(income.date)];
+      if (updateData.date) touchedMonths.push(monthOfDate(updateData.date));
+      await assertMonthsOpen(tx, income.accountId, touchedMonths);
+
       // Only an income that was applied to the wallet moves it, and only by the difference.
       // A bigger amount puts money in; a smaller one takes it out (blocked if it is not there).
       if (parsedAmount && income.walletApplied) {
@@ -301,6 +310,9 @@ exports.deleteIncome = async (req, res, next) => {
     }
 
     await prisma.$transaction(async (tx) => {
+      // An income of a closed month cannot be deleted
+      await assertMonthsOpen(tx, income.accountId, [monthOfDate(income.date)]);
+
       // Only revert what was really applied; blocked if that money is no longer in the wallet
       if (income.walletApplied) {
         await takeFromWallet(tx, income.accountId, income.amount);

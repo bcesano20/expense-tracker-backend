@@ -2,6 +2,7 @@ const { ERROR_MESSAGES } = require('../helpers/constants');
 
 const prisma = require('../helpers/prisma');
 const { ZERO, sumField } = require('../utils/money');
+const { getMonthSavings } = require('../helpers/monthClosing');
 
 // ============================================
 // FULL MONTHLY REPORT
@@ -137,7 +138,10 @@ exports.getMonthlyReport = async (req, res, next) => {
       return acc;
     }, {});
 
-    // 8. RESPOND WITH FULL REPORT
+    // 8. SAVINGS OF THE MONTH: the stored value if the month is closed, otherwise calculated now
+    const savings = await getMonthSavings(prisma, parseInt(accountId), monthNum, yearNum);
+
+    // 9. RESPOND WITH FULL REPORT
     res.status(200).json({
       success: true,
       data: {
@@ -146,6 +150,7 @@ exports.getMonthlyReport = async (req, res, next) => {
           year: yearNum,
           reportDate: new Date().toISOString(),
         },
+        savings,
         summary: {
           totalSpent,
           expenseCount: expenses.length,
@@ -640,6 +645,9 @@ exports.getIncomeVsExpenses = async (req, res, next) => {
     const balance = incomeDecimal.minus(expensesDecimal).toNumber();
     const expensePercentage = totalIncome === 0 ? null : (totalExpenses / totalIncome) * 100;
 
+    // Savings (credit counted by installment): the stored value if the month is closed
+    const savings = await getMonthSavings(prisma, parseInt(accountId), monthNum, yearNum);
+
     let status;
     if (totalIncome === 0) {
       status = 'NO_INCOME';
@@ -659,6 +667,7 @@ exports.getIncomeVsExpenses = async (req, res, next) => {
         totalExpenses: totalExpenses,
         balance: balance,
         expensePercentage,
+        savings,
         incomeCount: incomes.length,
         expenseCount: expenses.length,
         status,
