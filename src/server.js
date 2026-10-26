@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const { ERROR_MESSAGES } = require('./helpers/constants');
 const { InsufficientFundsError } = require('./helpers/wallet');
+const { MonthClosedError } = require('./helpers/monthClosing');
 const timeZoneMiddleware = require('./middleware/timeZoneMiddleware');
 
 const app = express();
@@ -23,6 +24,7 @@ const incomesRoutes = require('./routes/income');
 const budgetsRoutes = require('./routes/budget');
 const walletsRoutes = require('./routes/wallet');
 const installmentsRoutes = require('./routes/installment');
+const monthClosingsRoutes = require('./routes/monthClosing');
 
 // Middlewares
 app.use(cors({ origin: process.env.FRONTEND_URL }));
@@ -41,6 +43,7 @@ app.use('/api/incomes', incomesRoutes);
 app.use('/api/budgets', budgetsRoutes);
 app.use('/api/wallets', walletsRoutes);
 app.use('/api/installments', installmentsRoutes);
+app.use('/api/month-closings', monthClosingsRoutes);
 
 // Test route
 app.get('/api/test', (req, res) => {
@@ -58,6 +61,15 @@ app.use((err, req, res, next) => {
       success: false,
       error: isCard ? 'INSUFFICIENT_CARD_FUNDS' : 'INSUFFICIENT_FUNDS',
       message: `${isCard ? ERROR_MESSAGES.INSUFFICIENT_CARD_FUNDS : ERROR_MESSAGES.INSUFFICIENT_FUNDS}. Faltan ${err.shortfall.toFixed(2)}`,
+    });
+  }
+
+  // Expected business error: the write would touch a month that was already closed
+  if (err instanceof MonthClosedError) {
+    return res.status(409).json({
+      success: false,
+      error: 'MONTH_CLOSED',
+      message: `${ERROR_MESSAGES.MONTH_CLOSED} (${err.month}/${err.year})`,
     });
   }
 
