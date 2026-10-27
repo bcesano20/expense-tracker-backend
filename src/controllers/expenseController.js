@@ -1,8 +1,14 @@
-const { ERROR_MESSAGES } = require('../helpers/constants');
-const { calculateBillingMonth } = require('../utils/billingCalculator');
+const { PaymentMethod } = require('@prisma/client');
 
 const prisma = require('../helpers/prisma');
-const { splitAmount } = require('../utils/money');
+const { ERROR_MESSAGES } = require('../helpers/constants');
+const { calculateBillingMonth } = require('../utils/billingCalculator');
+const { splitAmount, parseAmount } = require('../utils/money');
+const {
+  CARD_METHODS,
+  NON_CARD_METHODS,
+  normalizePaymentMethod,
+} = require('../utils/paymentMethod');
 
 // ============================================
 // CREATE EXPENSE
@@ -31,11 +37,14 @@ exports.createExpense = async (req, res, next) => {
       });
     }
 
-    if (amount <= 0) {
+    // Parsed and check the amount first and the use that value in the rest of the object creation
+    const parsedAmount = parseAmount(amount);
+
+    if (!parsedAmount) {
       return res.status(400).json({
         success: false,
         error: 'INVALID_AMOUNT',
-        message: 'El monto debe ser mayor a 0',
+        message: ERROR_MESSAGES.INVALID_AMOUNT,
       });
     }
 
@@ -52,14 +61,44 @@ exports.createExpense = async (req, res, next) => {
       });
     }
 
+    // Check if the payment method selected is valid
+    const requestedPaymentMethod = normalizePaymentMethod(paymentMethod);
+
+    if (!requestedPaymentMethod) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_PAYMENT_METHOD',
+        message: ERROR_MESSAGES.INVALID_PAYMENT_METHOD,
+      });
+    }
+
+    // Checking the card payment method validation
+    const isCardMethod = CARD_METHODS.includes(requestedPaymentMethod);
+
+    if (isCardMethod && !cardId) {
+      return res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: ERROR_MESSAGES.CARD_REQUIRED_FOR_PAYMENT_METHOD,
+      });
+    }
+
+    if (!isCardMethod && cardId) {
+      return res.status(400).json({
+        success: false,
+        error: 'VALIDATION_ERROR',
+        message: ERROR_MESSAGES.CARD_NOT_ALLOWED_FOR_PAYMENT_METHOD,
+      });
+    }
+
     // 3. Logic according paymentMethod
     let expenseData = {
       accountId: parseInt(accountId),
       description: description.trim(),
-      amount: parseFloat(amount),
+      amount: parsedAmount,
       date: new Date(date),
       categoryId: parseInt(categoryId),
-      paymentMethod,
+      paymentMethod: requestedPaymentMethod,
       notes: notes ? notes.trim() : null,
     };
 
@@ -68,7 +107,7 @@ exports.createExpense = async (req, res, next) => {
     let shouldDecrementBalance = false;
 
     // If the expense is with card
-    if (paymentMethod === 'card' && cardId) {
+    if (isCardMethod) {
       // Check card existance
       const card = await prisma.card.findUnique({
         where: { id: parseInt(cardId) },
@@ -78,7 +117,7 @@ exports.createExpense = async (req, res, next) => {
         return res.status(404).json({
           success: false,
           error: 'CARD_NOT_FOUND',
-          message: 'Tarjeta no encontrada o no pertenece a esta cuenta',
+          message: ERROR_MESSAGES.CARD_NOT_FOUND,
         });
       }
 
@@ -90,6 +129,19 @@ exports.createExpense = async (req, res, next) => {
         });
       }
 
+      // The requested payment method must agree with the type of the card
+      const cardMethod = card.type === 'credit' ? PaymentMethod.CREDIT : PaymentMethod.DEBIT;
+
+      if (requestedPaymentMethod !== cardMethod) {
+        return res.status(400).json({
+          success: false,
+          error: 'VALIDATION_ERROR',
+          message: ERROR_MESSAGES.PAYMENT_METHOD_CARD_MISMATCH,
+        });
+      }
+
+      expenseData.paymentMethod = cardMethod;
+
       // Just the credit cards can have totalInstallments
       if (card.type === 'credit') {
         // Calculate the billing Month
@@ -98,13 +150,6 @@ exports.createExpense = async (req, res, next) => {
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
 
-        // If there are totalInstallments set the number
-        if (totalInstallments && totalInstallments > 1) {
-          expenseData.paymentMethod = `card-installments-${totalInstallments}`;
-        } else {
-          expenseData.paymentMethod = 'card';
-        }
-
         cardData = {
           cardId: parseInt(cardId),
         };
@@ -112,7 +157,7 @@ exports.createExpense = async (req, res, next) => {
         // Payment starts the month AFTER the billing/statement month
         if (totalInstallments && totalInstallments > 1) {
           // Rounded to 2 decimals; the last installment absorbs the leftover cents
-          const installmentAmounts = splitAmount(amount, totalInstallments);
+          const installmentAmounts = splitAmount(parsedAmount, totalInstallments);
 
           for (let i = 1; i <= totalInstallments; i++) {
             let paymentMonth = billingMonth + i; // +i so first payment is billingMonth+1
@@ -144,7 +189,7 @@ exports.createExpense = async (req, res, next) => {
           totalInstallmentsToCreate.push({
             installmentNumber: 1,
             totalInstallments: 1,
-            installmentAmount: parseFloat(amount),
+            installmentAmount: parsedAmount,
             paymentMonth,
             paymentYear,
             cardId: parseInt(cardId),
@@ -158,7 +203,6 @@ exports.createExpense = async (req, res, next) => {
 
         expenseData.billingMonth = billingMonth;
         expenseData.billingYear = billingYear;
-        expenseData.paymentMethod = 'card';
 
         // Balance is reduced inside the transaction below
         shouldDecrementBalance = true;
@@ -171,14 +215,14 @@ exports.createExpense = async (req, res, next) => {
         totalInstallmentsToCreate.push({
           installmentNumber: 1,
           totalInstallments: 1,
-          installmentAmount: parseFloat(amount),
+          installmentAmount: parsedAmount,
           paymentMonth: billingMonth,
           paymentYear: billingYear,
           cardId: parseInt(cardId),
         });
       }
     } else {
-      // Expense in cash or transfer
+      // Expense in cash, transfer or other
       const { billingMonth, billingYear } = {
         billingMonth: new Date(date).getMonth() + 1,
         billingYear: new Date(date).getFullYear(),
@@ -196,7 +240,7 @@ exports.createExpense = async (req, res, next) => {
           where: { id: parseInt(cardId) },
           data: {
             balance: {
-              decrement: parseFloat(amount),
+              decrement: parsedAmount,
             },
           },
         });
@@ -427,53 +471,37 @@ exports.updateExpense = async (req, res, next) => {
 
     if (description) updateData.description = description.trim();
     if (amount) {
-      if (amount <= 0) {
+      const parsedAmount = parseAmount(amount);
+
+      if (!parsedAmount) {
         return res.status(400).json({
           success: false,
           error: 'INVALID_AMOUNT',
-          message: 'El monto debe ser mayor a 0',
+          message: ERROR_MESSAGES.INVALID_AMOUNT,
         });
       }
-      updateData.amount = parseFloat(amount);
+      updateData.amount = parsedAmount;
     }
     if (categoryId) updateData.categoryId = parseInt(categoryId);
     if (date) updateData.date = new Date(date);
     if (notes !== undefined) updateData.notes = notes ? notes.trim() : null;
 
     // Handle payment method change
-    if (paymentMethod && paymentMethod !== expense.paymentMethod) {
+    if (paymentMethod) {
       const oldMethod = expense.paymentMethod;
-      const newMethod = paymentMethod;
+      const newMethod = normalizePaymentMethod(paymentMethod);
 
-      const NON_CARD_METHODS = ['cash', 'transfer', 'other'];
-
-      // Block changes involving credit card installments
-      if (
-        oldMethod.startsWith('card-installments-') ||
-        newMethod.startsWith('card-installments-')
-      ) {
+      if (!newMethod) {
         return res.status(400).json({
           success: false,
-          error: 'UNSUPPORTED_OPERATION',
-          message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION_CARD,
+          error: 'INVALID_PAYMENT_METHOD',
+          message: ERROR_MESSAGES.INVALID_PAYMENT_METHOD,
         });
       }
 
-      if (oldMethod === 'card') {
-        // Determine if old card was debit or credit
-        if (!expense.card) {
-          return res.status(400).json({
-            success: false,
-            error: 'UNSUPPORTED_OPERATION',
-            message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION,
-          });
-        }
-
-        const existingCard = await prisma.card.findUnique({
-          where: { id: expense.card.cardId },
-        });
-
-        if (existingCard.type === 'credit') {
+      if (newMethod !== oldMethod) {
+        // Block changes to or from credit (delete the expense and create it again)
+        if (oldMethod === PaymentMethod.CREDIT) {
           return res.status(400).json({
             success: false,
             error: 'UNSUPPORTED_OPERATION',
@@ -481,57 +509,7 @@ exports.updateExpense = async (req, res, next) => {
           });
         }
 
-        // Debit card → non-card: restore balance and remove card records
-        if (!NON_CARD_METHODS.includes(newMethod)) {
-          return res.status(400).json({
-            success: false,
-            error: 'UNSUPPORTED_OPERATION',
-            message: ERROR_MESSAGES.DELETE_EXPENSE_CREATE_AGAIN,
-          });
-        }
-
-        cardWrites.push(async (tx) => {
-          await tx.card.update({
-            where: { id: existingCard.id },
-            data: { balance: { increment: expense.amount } },
-          });
-
-          await tx.installment.deleteMany({ where: { expenseId: expense.id } });
-          await tx.expenseCard.delete({ where: { expenseId: expense.id } });
-        });
-
-        updateData.paymentMethod = newMethod;
-      } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === 'card') {
-        // Non-card → debit card
-        if (!cardId) {
-          return res.status(400).json({
-            success: false,
-            error: 'VALIDATION_ERROR',
-            message: 'cardId es requerido para cambiar a tarjeta',
-          });
-        }
-
-        const newCard = await prisma.card.findUnique({
-          where: { id: parseInt(cardId) },
-        });
-
-        if (!newCard || newCard.accountId !== expense.accountId) {
-          return res.status(404).json({
-            success: false,
-            error: 'CARD_NOT_FOUND',
-            message: ERROR_MESSAGES.CARD_NOT_FOUND,
-          });
-        }
-
-        if (!newCard.isActive) {
-          return res.status(400).json({
-            success: false,
-            error: 'CARD_CANCELLED',
-            message: ERROR_MESSAGES.CARD_CANCELLED,
-          });
-        }
-
-        if (newCard.type === 'credit') {
+        if (newMethod === PaymentMethod.CREDIT) {
           return res.status(400).json({
             success: false,
             error: 'UNSUPPORTED_OPERATION',
@@ -539,41 +517,109 @@ exports.updateExpense = async (req, res, next) => {
           });
         }
 
-        // Use updated date if provided, otherwise fall back to existing
-        const expenseDate = updateData.date ?? expense.date;
-        const billingMonth = expenseDate.getMonth() + 1;
-        const billingYear = expenseDate.getFullYear();
-        const finalAmount = updateData.amount ?? expense.amount;
+        if (oldMethod === PaymentMethod.DEBIT) {
+          if (!expense.card) {
+            return res.status(400).json({
+              success: false,
+              error: 'UNSUPPORTED_OPERATION',
+              message: ERROR_MESSAGES.UNSUPORTED_UPDATE_OPERATION,
+            });
+          }
 
-        cardWrites.push(async (tx) => {
-          await tx.card.update({
-            where: { id: newCard.id },
-            data: { balance: { decrement: finalAmount } },
+          // Debit card → non-card: restore balance and remove card records
+          if (!NON_CARD_METHODS.includes(newMethod)) {
+            return res.status(400).json({
+              success: false,
+              error: 'UNSUPPORTED_OPERATION',
+              message: ERROR_MESSAGES.DELETE_EXPENSE_CREATE_AGAIN,
+            });
+          }
+
+          cardWrites.push(async (tx) => {
+            await tx.card.update({
+              where: { id: expense.card.cardId },
+              data: { balance: { increment: expense.amount } },
+            });
+
+            await tx.installment.deleteMany({ where: { expenseId: expense.id } });
+            await tx.expenseCard.delete({ where: { expenseId: expense.id } });
           });
 
-          await tx.expenseCard.create({
-            data: { expenseId: expense.id, cardId: newCard.id },
+          updateData.paymentMethod = newMethod;
+        } else if (NON_CARD_METHODS.includes(oldMethod) && newMethod === PaymentMethod.DEBIT) {
+          // Non-card → debit card
+          if (!cardId) {
+            return res.status(400).json({
+              success: false,
+              error: 'VALIDATION_ERROR',
+              message: ERROR_MESSAGES.CARD_REQUIRED_FOR_PAYMENT_METHOD,
+            });
+          }
+
+          const newCard = await prisma.card.findUnique({
+            where: { id: parseInt(cardId) },
           });
 
-          await tx.installment.create({
-            data: {
-              expenseId: expense.id,
-              cardId: newCard.id,
-              installmentNumber: 1,
-              totalInstallments: 1,
-              installmentAmount: finalAmount,
-              paymentMonth: billingMonth,
-              paymentYear: billingYear,
-            },
-          });
-        });
+          if (!newCard || newCard.accountId !== expense.accountId) {
+            return res.status(404).json({
+              success: false,
+              error: 'CARD_NOT_FOUND',
+              message: ERROR_MESSAGES.CARD_NOT_FOUND,
+            });
+          }
 
-        updateData.paymentMethod = 'card';
-        updateData.billingMonth = billingMonth;
-        updateData.billingYear = billingYear;
-      } else if (NON_CARD_METHODS.includes(oldMethod) && NON_CARD_METHODS.includes(newMethod)) {
-        // Non-card to non-card: just update the field
-        updateData.paymentMethod = newMethod;
+          if (!newCard.isActive) {
+            return res.status(400).json({
+              success: false,
+              error: 'CARD_CANCELLED',
+              message: ERROR_MESSAGES.CARD_CANCELLED,
+            });
+          }
+
+          if (newCard.type === 'credit') {
+            return res.status(400).json({
+              success: false,
+              error: 'UNSUPPORTED_OPERATION',
+              message: ERROR_MESSAGES.CREDIT_CARD_NOT_UPDATAED,
+            });
+          }
+
+          // Use updated date if provided, otherwise fall back to existing
+          const expenseDate = updateData.date ?? expense.date;
+          const billingMonth = expenseDate.getMonth() + 1;
+          const billingYear = expenseDate.getFullYear();
+          const finalAmount = updateData.amount ?? expense.amount;
+
+          cardWrites.push(async (tx) => {
+            await tx.card.update({
+              where: { id: newCard.id },
+              data: { balance: { decrement: finalAmount } },
+            });
+
+            await tx.expenseCard.create({
+              data: { expenseId: expense.id, cardId: newCard.id },
+            });
+
+            await tx.installment.create({
+              data: {
+                expenseId: expense.id,
+                cardId: newCard.id,
+                installmentNumber: 1,
+                totalInstallments: 1,
+                installmentAmount: finalAmount,
+                paymentMonth: billingMonth,
+                paymentYear: billingYear,
+              },
+            });
+          });
+
+          updateData.paymentMethod = PaymentMethod.DEBIT;
+          updateData.billingMonth = billingMonth;
+          updateData.billingYear = billingYear;
+        } else if (NON_CARD_METHODS.includes(oldMethod) && NON_CARD_METHODS.includes(newMethod)) {
+          // Non-card to non-card: just update the field
+          updateData.paymentMethod = newMethod;
+        }
       }
     }
 
@@ -640,22 +686,14 @@ exports.deleteExpense = async (req, res, next) => {
     }
 
     // If was an expense with debit card, the salary must be restored
-    let debitCardToRestore = null;
-    if (expense.card && expense.paymentMethod === 'card') {
-      const cardRecord = await prisma.card.findUnique({
-        where: { id: expense.card.cardId },
-      });
-
-      if (cardRecord && cardRecord.type === 'debit') {
-        debitCardToRestore = cardRecord;
-      }
-    }
+    const debitCardId =
+      expense.paymentMethod === PaymentMethod.DEBIT && expense.card ? expense.card.cardId : null;
 
     // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     await prisma.$transaction(async (tx) => {
-      if (debitCardToRestore) {
+      if (debitCardId) {
         await tx.card.update({
-          where: { id: debitCardToRestore.id },
+          where: { id: debitCardId },
           data: {
             balance: {
               increment: expense.amount,

@@ -1,6 +1,6 @@
-const { ERROR_MESSAGES } = require('../helpers/constants');
-
 const prisma = require('../helpers/prisma');
+const { ERROR_MESSAGES } = require('../helpers/constants');
+const { parseAmount } = require('../utils/money');
 
 // CREATE CARD
 exports.createCard = async (req, res, next) => {
@@ -54,6 +54,20 @@ exports.createCard = async (req, res, next) => {
       });
     }
 
+    // Only debit cards keep a balance; credit cards ignore whatever was sent
+    let parsedBalance = null;
+    if (type === 'debit') {
+      parsedBalance = parseAmount(balance, { allowZero: true });
+
+      if (!parsedBalance) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT_OR_ZERO,
+        });
+      }
+    }
+
     const card = await prisma.card.create({
       data: {
         accountId: parseInt(accountId),
@@ -62,7 +76,7 @@ exports.createCard = async (req, res, next) => {
         type,
         network,
         closeDay: type === 'credit' ? parseInt(closeDay) : null,
-        balance: type === 'debit' ? parseFloat(balance) : null,
+        balance: parsedBalance,
       },
     });
 
@@ -151,7 +165,16 @@ exports.updateCard = async (req, res, next) => {
     const updateData = {};
     if (name) updateData.name = name;
     if (card.type === 'debit' && balance !== undefined) {
-      updateData.balance = parseFloat(balance);
+      const parsedBalance = parseAmount(balance, { allowZero: true });
+
+      if (!parsedBalance) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_AMOUNT',
+          message: ERROR_MESSAGES.INVALID_AMOUNT_OR_ZERO,
+        });
+      }
+      updateData.balance = parsedBalance;
     }
     if (card.type === 'credit' && closeDay !== undefined) {
       updateData.closeDay = parseInt(closeDay);

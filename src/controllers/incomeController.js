@@ -1,6 +1,6 @@
-const { ERROR_MESSAGES } = require('../helpers/constants');
-
 const prisma = require('../helpers/prisma');
+const { ERROR_MESSAGES } = require('../helpers/constants');
+const { parseAmount } = require('../utils/money');
 
 // ============================================
 // CREATE INCOME
@@ -18,11 +18,13 @@ exports.createIncome = async (req, res, next) => {
       });
     }
 
-    if (amount <= 0) {
+    const parsedAmount = parseAmount(amount);
+
+    if (!parsedAmount) {
       return res.status(400).json({
         success: false,
         error: 'INVALID_AMOUNT',
-        message: ERROR_MESSAGES.AMOUNT_MORE_0,
+        message: ERROR_MESSAGES.INVALID_AMOUNT,
       });
     }
 
@@ -42,7 +44,7 @@ exports.createIncome = async (req, res, next) => {
       data: {
         accountId: parseInt(accountId),
         description: description.trim(),
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         source,
         date: new Date(date),
       },
@@ -217,15 +219,18 @@ exports.updateIncome = async (req, res, next) => {
     if (description) updateData.description = description.trim();
     if (source) updateData.source = source.trim();
 
+    // Check that the ampunt from the body is valid
     if (amount !== undefined) {
-      if (amount <= 0) {
+      const parsedAmount = parseAmount(amount);
+
+      if (!parsedAmount) {
         return res.status(400).json({
           success: false,
           error: 'INVALID_AMOUNT',
-          message: ERROR_MESSAGES.AMOUNT_MORE_0,
+          message: ERROR_MESSAGES.INVALID_AMOUNT,
         });
       }
-      updateData.amount = parseFloat(amount);
+      updateData.amount = parsedAmount;
     }
 
     if (date) updateData.date = new Date(date);
