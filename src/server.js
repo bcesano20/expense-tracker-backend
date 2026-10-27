@@ -26,6 +26,15 @@ const walletsRoutes = require('./routes/wallet');
 const installmentsRoutes = require('./routes/installment');
 const monthClosingsRoutes = require('./routes/monthClosing');
 
+// Temporary to debug
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    console.log('CORS preflight. Origin:', req.headers.origin, '| Permitido:', process.env.FRONTEND_URL);
+  }
+  next();
+});
+
+
 // Middlewares
 app.use(cors({ origin: process.env.FRONTEND_URL }));
 app.use(express.json());
