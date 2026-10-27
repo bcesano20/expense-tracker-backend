@@ -3,6 +3,7 @@ const { PaymentMethod } = require('@prisma/client');
 const prisma = require('../helpers/prisma');
 const { ERROR_MESSAGES } = require('../helpers/constants');
 const { applyExpenseEffect, revertExpenseEffect } = require('../helpers/expenseEffect');
+const { assertMonthsOpen, assertSomeMonthOpen, monthOfDate } = require('../helpers/monthClosing');
 const { calculateBillingMonth } = require('../utils/billingCalculator');
 const { splitAmount, parseAmount } = require('../utils/money');
 const { CARD_METHODS, normalizePaymentMethod } = require('../utils/paymentMethod');
@@ -229,6 +230,14 @@ exports.createExpense = async (req, res, next) => {
 
     // 4. WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     const detailedExpense = await prisma.$transaction(async (tx) => {
+      // A closed month cannot receive new expenses. A credit purchase affects the months its
+      // installments are paid in; every other method affects the month of its date.
+      const affectedMonths =
+        expenseData.paymentMethod === PaymentMethod.CREDIT
+          ? totalInstallmentsToCreate.map((i) => ({ month: i.paymentMonth, year: i.paymentYear }))
+          : [monthOfDate(expenseData.date)];
+      await assertMonthsOpen(tx, expenseData.accountId, affectedMonths);
+
       // Take the money from where it comes from: the wallet (cash, transfer, other) or the debit
       // card. Blocked if it is short; a credit expense moves nothing yet.
       const { walletApplied } = await applyExpenseEffect(tx, {
@@ -586,6 +595,15 @@ exports.updateExpense = async (req, res, next) => {
 
     // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     const updatedExpense = await prisma.$transaction(async (tx) => {
+      // Neither the month of the expense, nor the month it is moved to, can be closed. A credit
+      // expense only changes description, category or notes, which cannot alter any saved
+      // number, so it is not checked.
+      if (oldMethod !== PaymentMethod.CREDIT) {
+        const touchedMonths = [monthOfDate(expense.date)];
+        if (dateChanged) touchedMonths.push(monthOfDate(newDate));
+        await assertMonthsOpen(tx, expense.accountId, touchedMonths);
+      }
+
       if (moneyChanged) {
         // First give back what the old version took, then take what the new one needs. The refund
         // is already counted when the new amount is checked, so only the real difference has to
@@ -689,6 +707,18 @@ exports.deleteExpense = async (req, res, next) => {
 
     // WRITE EVERYTHING ATOMICALLY (any error rolls back all the writes)
     await prisma.$transaction(async (tx) => {
+      if (expense.paymentMethod === PaymentMethod.CREDIT) {
+        // A credit purchase spread over closed AND open months can be deleted (only the open
+        // part is refunded); one whose installments are all in closed months cannot
+        await assertSomeMonthOpen(
+          tx,
+          expense.accountId,
+          expense.installments.map((i) => ({ month: i.paymentMonth, year: i.paymentYear }))
+        );
+      } else {
+        await assertMonthsOpen(tx, expense.accountId, [monthOfDate(expense.date)]);
+      }
+
       // Give the money back to where it came from: the wallet or the debit card
       await revertExpenseEffect(tx, expense);
 

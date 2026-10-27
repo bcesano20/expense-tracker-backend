@@ -66,12 +66,13 @@ src/
 │   ├── expenseController.js
 │   ├── incomeController.js
 │   ├── installmentController.js
+│   ├── monthClosingController.js
 │   ├── reportController.js
 │   ├── userController.js
 │   └── walletController.js
 ├── routes/                    # Endpoint definitions (one file per resource, singular names)
 │   ├── account.js  auth.js  budget.js  card.js  category.js
-│   └── expense.js  income.js  installment.js  report.js  user.js  wallet.js
+│   └── expense.js  income.js  installment.js  monthClosing.js  report.js  user.js  wallet.js
 ├── middleware/
 │   ├── authMiddleware.js      # JWT validation, sets req.user
 │   ├── timeZoneMiddleware.js  # reads the X-Timezone header, sets req.timeZone (global)
@@ -80,7 +81,8 @@ src/
 │   ├── prisma.js              # Shared PrismaClient (single connection pool); Decimal.toJSON -> number
 │   ├── constants.js           # ERROR_MESSAGES (Spanish user-facing messages)
 │   ├── wallet.js              # takeFromWallet / putIntoWallet / changeWallet, InsufficientFundsError
-│   └── expenseEffect.js       # applyExpenseEffect / revertExpenseEffect (where an expense's money comes from)
+│   ├── expenseEffect.js       # applyExpenseEffect / revertExpenseEffect (where an expense's money comes from)
+│   └── monthClosing.js        # assertMonthsOpen, calculateSavings, getMonthSavings, getClosingStatus, MonthClosedError
 └── utils/
     ├── billingCalculator.js   # calculateBillingMonth(expenseDate, cardCloseDay)
     ├── money.js               # parseAmount, splitAmount, sumField, ZERO (Decimal helpers)
@@ -109,6 +111,7 @@ All routes are mounted under `/api` in `server.js`. Everything except `register`
 | `/api/budgets` | `POST /`, `GET /`, `GET /:id`, `PUT /:id`, `DELETE /:id` |
 | `/api/wallets` | `GET /account/:accountId` (with the calculated total), `POST /account/:accountId` (activate with initial balance), `PUT /account/:accountId` (set the new total value) |
 | `/api/installments` | `GET /due?accountId=` (preview of what would be paid), `POST /pay` with `{ accountId, expectedTotal }` (pay every overdue installment) |
+| `/api/month-closings` | `GET /?accountId=` (closed months), `GET /preview?accountId=&month=&year=` (conditions + savings), `POST /` with `{ accountId, month, year }` (close a month) |
 | `/api/reports` | `GET /monthly`, `/summary`, `/category`, `/cards`, `/comparison`, `/budget-status`, `/income-ratio` |
 | `/api/test` | `GET` health check |
 
@@ -147,6 +150,7 @@ exports.createExpense = async (req, res, next) => {
   - `Account` → many `Card`, `Expense`, `Income`, `Budget`; optional one-to-one `Wallet`
   - `Wallet` → `accountId` unique, `balance Decimal(12,2)` (default 0, never negative: DB `CHECK`). See the Wallet section
   - `Installment` → `isPayed`, `paidAt`, `walletApplied` (see the Installment expenses and Wallet sections)
+  - `MonthClosing` → per account + month + year (unique): the stored `savings` of a closed month and `closedAt`. See the Month closing section
   - `Card` → many `ExpenseCard`, many `Installment`. Has `type` (`credit` | `debit`), `closeDay` (credit only), `balance` (debit only), `isActive` / `cancelledAt` (soft cancel)
   - `Expense` → belongs to a `Category`; optional one-to-one `ExpenseCard` (link to the card used); many `Installment`. `paymentMethod` is the `PaymentMethod` enum: `CASH`, `TRANSFER`, `DEBIT`, `CREDIT`, `OTHER`. Has `walletApplied`.
   - `Budget` → per account + category + month + year (unique together); either a fixed `amount` or a `minAmount`/`maxAmount` range
@@ -203,7 +207,7 @@ res.status(400).json({
 });
 ```
 
-Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `INVALID_PAYMENT_METHOD`, `INSUFFICIENT_FUNDS` (wallet), `INSUFFICIENT_CARD_FUNDS`, `INSTALLMENTS_CHANGED`, `NO_INSTALLMENTS_DUE`, `UNSUPPORTED_OPERATION`, `CONFLICT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
+Error codes used so far include `VALIDATION_ERROR`, `INVALID_AMOUNT`, `INVALID_PAYMENT_METHOD`, `INSUFFICIENT_FUNDS` (wallet), `INSUFFICIENT_CARD_FUNDS`, `INSTALLMENTS_CHANGED`, `NO_INSTALLMENTS_DUE`, `MONTH_CLOSED`, `MONTH_ALREADY_CLOSED`, `MONTH_NOT_ENDED`, `MONTH_BEFORE_WALLET`, `PREVIOUS_MONTH_OPEN`, `INSTALLMENTS_UNPAID`, `WALLET_REQUIRED`, `UNSUPPORTED_OPERATION`, `CONFLICT`, `FORBIDDEN`, `NOT_FOUND`, `INVALID_CREDENTIALS`, `NO_TOKEN`, `INVALID_TOKEN`, `CARD_NOT_FOUND`, `CARD_CANCELLED`, `TOO_MANY_REQUESTS` and `SERVER_ERROR`.
 
 ### Error messages
 
@@ -319,11 +323,21 @@ An account may have one `Wallet`: its free money, outside the debit cards. It is
 - **Helpers (`src/helpers/wallet.js`):** `takeFromWallet(tx, accountId, amount)`, `putIntoWallet(tx, accountId, amount)` and `changeWallet(tx, accountId, delta)` (positive puts money in, negative takes it out). Always pass the transaction client `tx`. They return `{ applied }`; `applied: false` means the account has no wallet and nothing was touched. `takeFromWallet` is a single conditional `UPDATE ... WHERE balance >= amount`. Never read the balance and then write it: two requests could both pass the check. If the money is not there it throws `InsufficientFundsError`, which the error handler turns into `400 INSUFFICIENT_FUNDS` ("Faltan <amount>").
 - **`walletApplied` (on `Expense` and `Income`):** set from the helper's `applied` when the effect is applied. Only what was really applied is reverted. Records created before the wallet existed stay `false` and never move the wallet, not even when edited or deleted. For a `DEBIT` expense it means "the account had a wallet when it was applied".
 - **Incomes:** create puts the amount in; editing the amount moves only the difference; delete takes the amount out. Lowering or deleting an income is blocked when the wallet no longer holds that money.
-- **Expenses** (money logic in `src/helpers/expenseEffect.js`): `CASH`, `TRANSFER` and `OTHER` take the amount from the wallet; delete puts it back. `DEBIT` takes it from the card balance, and is blocked (`INSUFFICIENT_CARD_FUNDS`) if the card is short, but only on accounts with a wallet. `CREDIT` does not move the wallet when it is bought (paying its installments does); deleting a credit expense gives back only the installments that were paid through the wallet (`isPayed` and `walletApplied`), never unpaid ones or ones paid on an account without a wallet. An edit that changes the method, amount or card is done as revert-then-apply in one transaction, so only the real difference has to be available.
+- **Expenses** (money logic in `src/helpers/expenseEffect.js`): `CASH`, `TRANSFER` and `OTHER` take the amount from the wallet; delete puts it back. `DEBIT` takes it from the card balance, and is blocked (`INSUFFICIENT_CARD_FUNDS`) if the card is short, but only on accounts with a wallet. `CREDIT` does not move the wallet when it is bought (paying its installments does); deleting a credit expense gives back only the installments that were paid through the wallet (`isPayed` and `walletApplied`) and sit in an OPEN month, never unpaid ones, ones paid on an account without a wallet, or ones in a closed month. An edit that changes the method, amount or card is done as revert-then-apply in one transaction, so only the real difference has to be available.
 - **Debit refunds:** an active card gets its money back. If the card was cancelled or deleted, the refund goes to the wallet (when the expense was tracked). A `DEBIT` expense whose card is cancelled or gone cannot change amount or card until the user picks an active card or another method; editing description, category or notes is always allowed.
 - **Debit cards:** creating one with a balance takes that balance from the wallet; editing the balance moves the difference (loading takes from the wallet, lowering gives back); cancelling gives the whole balance back and sets it to 0; deleting an active card gives back its remaining balance (the expenses stay, without a card link). A cancelled card's balance cannot be edited (`CARD_CANCELLED_BALANCE`).
 - **Installment payments** move the wallet too (see the Installment expenses section). `Installment.walletApplied` follows the same rule as the other `walletApplied` fields: only what was really applied is reverted.
-- **Not implemented yet (last phase of the design):** `MonthClosing` and the lock on closed months. Until then every month counts as open, so deleting a credit expense refunds all of its paid installments.
+- **Month closing** moves no money, but it freezes the months it closes (see the next section).
+
+### Month closing (accounts with a wallet)
+
+Closing a month stores its savings in `MonthClosing` and locks the month. It never touches the wallet, it cannot be undone (no reopen endpoint) and a mistake is corrected with the manual wallet edit. Only accounts with a wallet can close months; savings are shown for every account.
+
+- **Savings of month M** (`calculateSavings` in `src/helpers/monthClosing.js`) = incomes dated in M, minus the non-credit expenses (cash, transfer, other, debit) dated in M, minus the credit installments whose payment month is M. Credit counts by installment because that is when its money leaves the wallet; debit installments are not counted again; topping up a debit card is not an expense. It can be negative (a deficit). The existing report totals (`balance`, `totalSpent`, billed by `billingMonth`) are a different calculation and were left unchanged. `getMonthlyReport` and `getIncomeVsExpenses` add `savings: { amount, isClosed, closedAt, source }`: `source` is `saved` (the stored value) for a closed month and `live` otherwise.
+- **To close month M** (`POST /api/month-closings`, `getClosingStatus`; checked in this order, the first failure is the error code): (1) `MONTH_NOT_ENDED` unless M is before the current month in `req.timeZone`; (2) `MONTH_BEFORE_WALLET` if M is before the month the wallet was activated (month of `Wallet.createdAt` in `req.timeZone`); (3) `PREVIOUS_MONTH_OPEN` unless M-1 is closed (the activation month is exempt); (4) `INSTALLMENTS_UNPAID` if any installment paid in M is unpaid. No wallet is `400 WALLET_REQUIRED`; an already closed month is `409 MONTH_ALREADY_CLOSED` (also when two requests race: the unique index decides). `GET /preview` returns the same conditions plus the savings for the UI.
+- **The lock:** creating, editing or deleting an expense or an income whose month is closed is `409 MONTH_CLOSED` (`MonthClosedError`, mapped in `server.js`). Call `assertMonthsOpen(tx, accountId, months)` inside the transaction before the first write. Moving a record into or out of a closed month is blocked too.
+- **"Month of a date" is its UTC calendar month** (`monthOfDate`). Dates are stored at midnight UTC (the user picks a day), so this is independent of the server clock. Range filters on dates must use `Date.UTC(...)` boundaries, never `new Date(year, month, 1)`.
+- **Credit expenses follow their installments, not their purchase date:** creating one is blocked if any of its installments falls in a closed month (a purchase dated in a closed month but paid in an open one is fine); editing description, category or notes is always allowed; deleting is blocked only when ALL its installments are in closed months, and a mixed one is deleted refunding only the paid installments of open months. The stored savings of closed months never change.
 
 ### Cancelled cards
 
@@ -396,6 +410,7 @@ When adding a new route, make sure to:
 - [ ] **Use `prisma.$transaction`** when writing to more than one table
 - [ ] **Validate amounts with `parseAmount`** (never `parseFloat`) and compare `Decimal`s with their methods
 - [ ] **Use the wallet helpers inside the transaction** if the route moves money, and store `walletApplied` from their result (see the Wallet section)
+- [ ] **Call `assertMonthsOpen(tx, ...)`** first if the route creates, edits or deletes an expense or income (see the Month closing section)
 - [ ] **Add a rate limiter** if the route is public and sensitive (login-like)
 - [ ] **Document business rules** if any (e.g.: billing month logic)
 - [ ] **Register the route** in `server.js` and update the API surface table above
