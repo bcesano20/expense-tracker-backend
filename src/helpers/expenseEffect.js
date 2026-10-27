@@ -1,13 +1,14 @@
 const { Prisma, PaymentMethod } = require('@prisma/client');
 
 const { NON_CARD_METHODS } = require('../utils/paymentMethod');
-const { ZERO } = require('../utils/money');
+const { ZERO, sumField } = require('../utils/money');
 const { InsufficientFundsError, takeFromWallet, putIntoWallet } = require('./wallet');
 
 // Where the money of an expense comes from, and how to give it back:
 //   CASH / TRANSFER / OTHER -> the wallet (only if the expense was applied to it)
 //   DEBIT                   -> the balance of the debit card
-//   CREDIT                  -> nothing yet: its installments are handled in the next phase
+//   CREDIT                  -> nothing when it is bought; the user pays its installments later (see
+//                              installmentController). Only deleting it refunds the paid ones.
 // Every function takes the transaction client `tx`, so it rolls back with the rest of the operation.
 
 // Takes the amount from a debit card. When `checkBalance` is true (the account has a wallet) the
@@ -86,6 +87,23 @@ const revertExpenseEffect = async (tx, expense) => {
       });
     } else if (expense.walletApplied) {
       await putIntoWallet(tx, expense.accountId, expense.amount);
+    }
+    return;
+  }
+
+  if (expense.paymentMethod === PaymentMethod.CREDIT) {
+    // Buying on credit moved nothing; paying its installments did. Give back only the ones that
+    // were paid through the wallet. Unpaid ones, and ones paid on an account without a wallet,
+    // never took money from it, so there is nothing to return.
+    const paidInstallments = await tx.installment.findMany({
+      where: { expenseId: expense.id, isPayed: true, walletApplied: true },
+      select: { installmentAmount: true },
+    });
+
+    const paidTotal = sumField(paidInstallments, 'installmentAmount');
+
+    if (paidTotal.gt(0)) {
+      await putIntoWallet(tx, expense.accountId, paidTotal);
     }
   }
 };

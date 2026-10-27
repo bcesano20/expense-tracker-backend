@@ -127,6 +127,7 @@ exports.getMonthlyReport = async (req, res, next) => {
         expenseAmount: installment.expense.amount,
         installmentProgress: `${installment.installmentNumber}/${installment.totalInstallments}`,
         amount: installment.installmentAmount,
+        isPayed: installment.isPayed,
       });
     });
 
@@ -430,6 +431,7 @@ exports.getCardDetails = async (req, res, next) => {
             expenseDescription: installment.expense.description,
             installmentProgress: `${installment.installmentNumber}/${installment.totalInstallments}`,
             amount: installment.installmentAmount,
+            isPayed: installment.isPayed,
           })),
         };
       })

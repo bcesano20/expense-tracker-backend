@@ -46,6 +46,9 @@ const ERROR_MESSAGES = {
   INSUFFICIENT_CARD_FUNDS: 'Saldo insuficiente en la tarjeta',
   CREDIT_EXPENSE_LIMITED_EDIT:
     'Los gastos con tarjeta de crédito solo permiten editar descripción, categoría y notas. Para cambiar monto, fecha o tarjeta elimina el gasto y créalo de nuevo',
+  INSTALLMENTS_ACCOUNT_PERMISSION: 'No tienes permiso para operar sobre las cuotas de esta cuenta',
+  NO_INSTALLMENTS_DUE: 'No hay cuotas vencidas para pagar',
+  INSTALLMENTS_CHANGED: 'Las cuotas a pagar cambiaron. Actualiza la lista y confirma de nuevo',
   WALLET_ACCOUNT_PERMISSION: 'No tienes permiso para operar sobre la billetera de esta cuenta',
   WALLET_ALREADY_EXISTS: 'La cuenta ya tiene una billetera',
   WALLET_NOT_FOUND: 'La cuenta no tiene una billetera',
