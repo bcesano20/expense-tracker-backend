@@ -27,7 +27,7 @@ const installmentsRoutes = require('./routes/installment');
 const monthClosingsRoutes = require('./routes/monthClosing');
 
 // Middlewares
-app.use(cors({ origin: process.env.FRONTEND_URL }));
+app.use(cors({ origin: process.env.FRONTEND_URL, maxAge: 600 }));
 app.use(express.json());
 app.use(timeZoneMiddleware);
 
